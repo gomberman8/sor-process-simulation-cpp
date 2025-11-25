@@ -1,0 +1,25 @@
+# Build artifacts
+build/
+sor-simulation/build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Objects / binaries
+*.o
+*.obj
+*.so
+*.a
+*.exe
+
+# IDE / tooling
+.vscode/
+.idea/
+*.swp
+*.swo
+*.user
+compile_commands.json
+
+# Logs
+*.log
