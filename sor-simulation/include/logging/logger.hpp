@@ -2,6 +2,8 @@
 
 #include <string>
 
+#include "model/types.hpp"
+
 /**
  * @brief Dedicated logger writing text lines to a file descriptor.
  */
@@ -37,3 +39,21 @@ public:
 private:
     int fd;
 };
+
+/**
+ * @brief Blocking logger loop: read LogMessage from queue and write to file.
+ * @param queueId message queue id for LOG_QUEUE.
+ * @param path log file path.
+ * @return 0 on clean exit, non-zero on error.
+ */
+int runLogger(int queueId, const std::string& path);
+
+/**
+ * @brief Convenience helper to send a LogMessage through LOG_QUEUE.
+ * @param queueId message queue id for LOG_QUEUE.
+ * @param role sender role.
+ * @param simTime simulated time minutes.
+ * @param text text payload.
+ * @return true on success, false on failure.
+ */
+bool logEvent(int queueId, Role role, int simTime, const std::string& text);

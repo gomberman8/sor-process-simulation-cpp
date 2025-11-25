@@ -5,6 +5,12 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <string>
+#include <sys/msg.h>
+#include <cstring>
+#include <iostream>
+
+#include "model/events.hpp"
+#include "model/types.hpp"
 
 Logger::Logger() : fd(-1) {}
 
@@ -42,4 +48,83 @@ void Logger::closeFile() {
         ::close(fd);
         fd = -1;
     }
+}
+
+namespace {
+std::string roleToString(int roleInt) {
+    auto role = static_cast<Role>(roleInt);
+    switch (role) {
+        case Role::Director: return "DIRECTOR";
+        case Role::PatientGenerator: return "PATIENT_GEN";
+        case Role::Patient: return "PATIENT";
+        case Role::Registration1: return "REG1";
+        case Role::Registration2: return "REG2";
+        case Role::Triage: return "TRIAGE";
+        case Role::SpecialistCardio: return "SPEC_CARDIO";
+        case Role::SpecialistNeuro: return "SPEC_NEURO";
+        case Role::SpecialistOphthalmo: return "SPEC_OPHTH";
+        case Role::SpecialistLaryng: return "SPEC_LARYNG";
+        case Role::SpecialistSurgeon: return "SPEC_SURGEON";
+        case Role::SpecialistPaediatric: return "SPEC_PAED";
+        case Role::Logger: return "LOGGER";
+        default: return "UNKNOWN";
+    }
+}
+} // namespace
+
+int runLogger(int queueId, const std::string& path) {
+    Logger logger(path);
+    if (queueId == -1) {
+        logErrno("runLogger invalid queue id");
+        return 1;
+    }
+
+    bool ok = true;
+    while (true) {
+        LogMessage msg{};
+        ssize_t res = msgrcv(queueId, &msg, sizeof(LogMessage) - sizeof(long),
+                             static_cast<long>(EventType::LogMessage), 0);
+        if (res == -1) {
+            if (errno == EINTR) {
+                continue;
+            }
+            logErrno("Logger msgrcv failed");
+            ok = false;
+            break;
+        }
+
+        if (std::strncmp(msg.text, "END", 3) == 0) {
+            break;
+        }
+
+        // Semicolon-separated line for easy parsing/CSV import:
+        // simTime;pid;role;text
+        std::string line = std::to_string(msg.simTime) + ";"
+                         + std::to_string(msg.pid) + ";"
+                         + roleToString(msg.role) + ";"
+                         + msg.text;
+        logger.logLine(line);
+    }
+
+    logger.closeFile();
+    return ok ? 0 : 1;
+}
+
+bool logEvent(int queueId, Role role, int simTime, const std::string& text) {
+    if (queueId == -1) {
+        logErrno("logEvent invalid queue id");
+        return false;
+    }
+    LogMessage msg{};
+    msg.mtype = static_cast<long>(EventType::LogMessage);
+    msg.role = static_cast<int>(role);
+    msg.simTime = simTime;
+    msg.pid = getpid();
+    std::strncpy(msg.text, text.c_str(), sizeof(msg.text) - 1);
+    size_t payloadSize = sizeof(LogMessage) - sizeof(long);
+    if (msgsnd(queueId, &msg, payloadSize, 0) == -1) {
+        logErrno("logEvent msgsnd failed");
+        return false;
+    }
+    return true;
 }

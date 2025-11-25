@@ -107,12 +107,17 @@ This document describes the intended behavior, inputs, outputs, and example usag
     - Writes a single line (plus newline) if `fd` valid.
   - `void closeFile();`
     - Closes descriptor if open.
+  - `int runLogger(int queueId, const std::string& path);`
+    - Blocking loop reading `LogMessage` from LOG_QUEUE and writing to file; stops on `"END"` text marker.
+  - `bool logEvent(int queueId, Role role, int simTime, const std::string& text);`
+    - Convenience helper to send `LogMessage` via an existing queue id.
 - **Example:**  
   ```cpp
   Logger logger("sor.log");
   logger.logLine("[SIM=0001][PID=1234][ROLE=TRIAGE] patient triaged");
   logger.closeFile();
   ```
+- **Format used by runLogger:** semicolon-separated `simTime;pid;role;text` for easy CSV/chart imports (one line per message).
 
 ## Utility
 
@@ -147,8 +152,9 @@ This document describes the intended behavior, inputs, outputs, and example usag
 ### `Director` (`director.hpp/.cpp`)
 - **Purpose:** Main orchestrator; sets up IPC, spawns all child roles, handles signals/cleanup.
 - **Method:**
-  - `int run();`
+  - `int run(const std::string& selfPath, const Config& config);`
     - Expected to return `0` on clean shutdown; non-zero on failure.
+    - `selfPath` is used to `exec` child roles (logger now, later others).
 - **Example:**  
   ```cpp
   int main() { Director d; return d.run(); }

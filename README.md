@@ -22,6 +22,17 @@ mkdir -p build
 cd build
 cmake ..
 cmake --build .
+# defaults: N=10 K=5 duration=60 totalPatients=20 msPerMinute=100 seed=12345
 ./sor_sim
+
+# or provide config explicitly
+./sor_sim <N_waitingRoom> <K_threshold> <simMinutes> <totalPatients> <msPerSimMinute> <seed>
 ```
 Current binary prints a confirmation message; functional simulation arrives in subsequent commits.
+
+Logger is spawned via `fork()+exec()` internally; a standalone logger mode exists for debugging:
+```bash
+./sor_sim logger <queueId> <logPath>
+```
+
+**Note (environment):** System V IPC (msg/sem/shm) is required and may be blocked on macOS; run and test on the target Debian lab machine for correct behavior.

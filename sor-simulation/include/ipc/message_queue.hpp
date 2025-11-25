@@ -45,6 +45,12 @@ public:
     /** @brief Underlying queue id, or -1 if not created. */
     int id() const;
 
+    /**
+     * @brief Remove the queue from the system (IPC_RMID).
+     * @return true on success, false on failure.
+     */
+    bool destroy();
+
 private:
     int mqId;
 };

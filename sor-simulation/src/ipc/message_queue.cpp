@@ -63,3 +63,15 @@ bool MessageQueue::receive(void* buffer, size_t size, long type, int flags) {
 int MessageQueue::id() const {
     return mqId;
 }
+
+bool MessageQueue::destroy() {
+    if (mqId == -1) {
+        logErrno("MessageQueue::destroy called before create");
+        return false;
+    }
+    if (msgctl(mqId, IPC_RMID, nullptr) == -1) {
+        logErrno("msgctl IPC_RMID failed");
+        return false;
+    }
+    return true;
+}
