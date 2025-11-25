@@ -42,6 +42,13 @@ public:
      */
     bool destroy();
 
+    /**
+     * @brief Open an existing segment by key without creating a new one.
+     * @param key System V key.
+     * @return true on success, false on failure.
+     */
+    bool open(key_t key);
+
     /** @brief Underlying shm id, or -1 if not created. */
     int id() const;
 

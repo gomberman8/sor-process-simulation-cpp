@@ -40,6 +40,13 @@ public:
      */
     bool destroy();
 
+    /**
+     * @brief Open an existing semaphore set by key without reinitializing.
+     * @param key System V key.
+     * @return true on success, false on failure.
+     */
+    bool open(key_t key);
+
     /** @brief Underlying semaphore id, or -1 if not created. */
     int id() const;
 

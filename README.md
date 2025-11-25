@@ -34,5 +34,9 @@ Logger is spawned via `fork()+exec()` internally; a standalone logger mode exist
 ```bash
 ./sor_sim logger <queueId> <logPath>
 ```
+Registration role can be invoked directly (for debugging IPC setup):
+```bash
+./sor_sim registration <keyPath>   # keyPath typically the executable path used by director
+```
 
 **Note (environment):** System V IPC (msg/sem/shm) is required and may be blocked on macOS; run and test on the target Debian lab machine for correct behavior.

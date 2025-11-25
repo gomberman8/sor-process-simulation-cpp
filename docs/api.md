@@ -27,11 +27,13 @@ This document describes the intended behavior, inputs, outputs, and example usag
     - Wraps `msgrcv`; reads message of `type` (or first if `type == 0`).
     - **Returns:** `true` on success; `false` on failure.
     - **Example:**  
-      ```cpp
-      EventMessage ev{};
-      mq.receive(&ev, sizeof(ev), static_cast<long>(EventType::PatientArrived));
-      ```
+  ```cpp
+  EventMessage ev{};
+  mq.receive(&ev, sizeof(ev), static_cast<long>(EventType::PatientArrived));
+  ```
   - `int id() const;` → the underlying queue id (`-1` if not created).
+  - `bool destroy();` → IPC_RMID.
+  - `bool open(key_t key);` → open existing queue without creating.
 
 ### `SharedMemory` (`ipc/shared_memory.hpp/.cpp`)
 - **Purpose:** Manage System V shared memory segment for `SharedState`.
@@ -45,6 +47,7 @@ This document describes the intended behavior, inputs, outputs, and example usag
     - Calls `shmdt`; **Returns:** `true` on success.
   - `bool destroy();`
     - Calls `shmctl(..., IPC_RMID, ...)`; **Returns:** `true` on success.
+  - `bool open(key_t key);` open existing segment by key.
   - `int id() const;` → underlying shm id (`-1` if not created).
 - **Example:**  
   ```cpp
@@ -68,6 +71,7 @@ This document describes the intended behavior, inputs, outputs, and example usag
     - V operation (`semop` with `+1`); **Returns:** `true` on success.
   - `bool destroy();`
     - `semctl(IPC_RMID)`; **Returns:** `true` on success.
+  - `bool open(key_t key);` open existing set by key.
   - `int id() const;` → semaphore set id (`-1` if not created).
 - **Example:**  
   ```cpp
@@ -173,7 +177,7 @@ This document describes the intended behavior, inputs, outputs, and example usag
 ### `Registration` (`roles/registration.hpp/.cpp`)
 - **Purpose:** Represents one registration window consuming from `REGISTRATION_QUEUE`.
 - **Method:**
-  - `int run();` → 0 on normal exit.
+  - `int run(const std::string& keyPath);` → 0 on normal exit. Opens IPC via `ftok(keyPath, ...)`, reads from REG queue, updates shared state under semaphore, forwards to TRIAGE queue, logs activity, exits cleanly on SIGUSR2.
 
 ### `Triage` (`roles/triage.hpp/.cpp`)
 - **Purpose:** Assigns triage color, optionally sends home, forwards to specialists.

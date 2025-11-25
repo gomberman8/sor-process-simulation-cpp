@@ -6,6 +6,7 @@
 #include "director.hpp"
 #include "logging/logger.hpp"
 #include "model/config.hpp"
+#include "roles/registration.hpp"
 
 namespace {
 bool parseConfig(int argc, char* argv[], Config& cfg, std::string& err) {
@@ -69,6 +70,15 @@ int main(int argc, char* argv[]) {
         int queueId = std::stoi(argv[2]);
         std::string logPath = argv[3];
         return runLogger(queueId, logPath);
+    }
+
+    if (argc >= 2 && std::string(argv[1]) == "registration") {
+        if (argc < 3) {
+            std::cerr << "Registration mode usage: " << argv[0] << " registration <keyPath>" << std::endl;
+            return EXIT_FAILURE;
+        }
+        Registration reg;
+        return reg.run(argv[2]);
     }
 
     Config cfg{};

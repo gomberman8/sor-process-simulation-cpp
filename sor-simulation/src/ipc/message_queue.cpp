@@ -75,3 +75,12 @@ bool MessageQueue::destroy() {
     }
     return true;
 }
+
+bool MessageQueue::open(key_t key) {
+    mqId = msgget(key, 0);
+    if (mqId == -1) {
+        logErrno("msgget open failed");
+        return false;
+    }
+    return true;
+}

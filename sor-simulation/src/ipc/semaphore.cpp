@@ -62,6 +62,15 @@ bool Semaphore::destroy() {
     return true;
 }
 
+bool Semaphore::open(key_t key) {
+    semId = semget(key, 1, 0);
+    if (semId == -1) {
+        logErrno("semget open failed");
+        return false;
+    }
+    return true;
+}
+
 int Semaphore::id() const {
     return semId;
 }

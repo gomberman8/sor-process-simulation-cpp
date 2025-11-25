@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 /**
  * @brief One registration window consuming from REGISTRATION_QUEUE.
  */
@@ -9,7 +11,8 @@ public:
 
     /**
      * @brief Process incoming patients and forward to triage.
+     * @param keyPath path used for ftok keys (shared with director).
      * @return 0 on normal exit.
      */
-    int run();
+    int run(const std::string& keyPath);
 };

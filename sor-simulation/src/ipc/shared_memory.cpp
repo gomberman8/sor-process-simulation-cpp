@@ -58,6 +58,15 @@ bool SharedMemory::destroy() {
     return true;
 }
 
+bool SharedMemory::open(key_t key) {
+    shmId = shmget(key, 0, 0);
+    if (shmId == -1) {
+        logErrno("shmget open failed");
+        return false;
+    }
+    return true;
+}
+
 int SharedMemory::id() const {
     return shmId;
 }

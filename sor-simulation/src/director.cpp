@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 #include <unistd.h>
+#include <signal.h>
 
 namespace {
 struct IpcIds {
@@ -186,7 +187,33 @@ int Director::run(const std::string& selfPath, const Config& config) {
         logEvent(ids.logQueue, Role::Director, 0, "Director: IPC initialized, logger spawned: " + logPath);
     }
 
-    // TODO: spawn roles via exec with IPC ids once implemented.
+    pid_t reg1Pid = -1;
+    if (ok) {
+        reg1Pid = fork();
+        if (reg1Pid == -1) {
+            logErrno("fork for registration failed");
+            ok = false;
+        } else if (reg1Pid == 0) {
+            std::vector<char*> args;
+            args.push_back(const_cast<char*>(selfPath.c_str()));
+            args.push_back(const_cast<char*>("registration"));
+            args.push_back(const_cast<char*>(selfPath.c_str())); // key path same as executable
+            args.push_back(nullptr);
+            execv(selfPath.c_str(), args.data());
+            logErrno("execv for registration failed");
+            _exit(1);
+        } else {
+            if (shared) {
+                shared->registration1Pid = reg1Pid;
+            }
+            logEvent(ids.logQueue, Role::Director, 0, "Registration1 spawned");
+        }
+    }
+
+    // For now, immediately shutdown roles to demonstrate lifecycle.
+    if (reg1Pid > 0) {
+        kill(reg1Pid, SIGUSR2);
+    }
 
     // send termination marker for logger
     if (ok) {
@@ -194,6 +221,12 @@ int Director::run(const std::string& selfPath, const Config& config) {
     }
 
     int status = 0;
+    if (reg1Pid > 0) {
+        if (waitpid(reg1Pid, nullptr, 0) == -1) {
+            logErrno("waitpid for registration failed");
+            ok = false;
+        }
+    }
     if (loggerPid > 0) {
         if (waitpid(loggerPid, &status, 0) == -1) {
             logErrno("waitpid for logger failed");

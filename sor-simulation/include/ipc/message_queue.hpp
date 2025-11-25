@@ -51,6 +51,13 @@ public:
      */
     bool destroy();
 
+    /**
+     * @brief Open an existing queue without reinitializing (msgget without IPC_CREAT).
+     * @param key System V key.
+     * @return true on success, false on failure.
+     */
+    bool open(key_t key);
+
 private:
     int mqId;
 };
