@@ -7,15 +7,19 @@
 #include "logging/logger.hpp"
 #include "model/config.hpp"
 #include "roles/registration.hpp"
+#include "roles/triage.hpp"
+#include "roles/specialist.hpp"
+#include "roles/patient_generator.hpp"
+#include "roles/patient.hpp"
 
 namespace {
 bool parseConfig(int argc, char* argv[], Config& cfg, std::string& err) {
-    // Defaults if no args provided.
-    cfg.N_waitingRoom = 10;
-    cfg.K_registrationThreshold = 5;
-    cfg.timeScaleMsPerSimMinute = 100;
-    cfg.simulationDurationMinutes = 60;
-    cfg.totalPatientsTarget = 20;
+    // Defaults if no args provided (geared for larger runs).
+    cfg.N_waitingRoom = 200;
+    cfg.K_registrationThreshold = 100;
+    cfg.timeScaleMsPerSimMinute = 10;
+    cfg.simulationDurationMinutes = 720; // 12h simulated
+    cfg.totalPatientsTarget = 2000;
     cfg.randomSeed = 12345;
 
     // If arguments beyond program name exist and not in logger mode, expect all fields.
@@ -79,6 +83,59 @@ int main(int argc, char* argv[]) {
         }
         Registration reg;
         return reg.run(argv[2]);
+    }
+
+    if (argc >= 2 && std::string(argv[1]) == "triage") {
+        if (argc < 3) {
+            std::cerr << "Triage mode usage: " << argv[0] << " triage <keyPath>" << std::endl;
+            return EXIT_FAILURE;
+        }
+        Triage triage;
+        return triage.run(argv[2]);
+    }
+
+    if (argc >= 2 && std::string(argv[1]) == "specialist") {
+        if (argc < 4) {
+            std::cerr << "Specialist mode usage: " << argv[0] << " specialist <keyPath> <typeInt>" << std::endl;
+            return EXIT_FAILURE;
+        }
+        SpecialistType type = static_cast<SpecialistType>(std::stoi(argv[3]));
+        Specialist spec;
+        return spec.run(argv[2], type);
+    }
+
+    if (argc >= 2 && std::string(argv[1]) == "patient_generator") {
+        if (argc < 9) {
+            std::cerr << "Patient generator usage: " << argv[0]
+                      << " patient_generator <keyPath> <N> <K> <simMinutes> <totalPatients> <msPerMinute> <seed>"
+                      << std::endl;
+            return EXIT_FAILURE;
+        }
+        Config cfg{};
+        cfg.N_waitingRoom = std::stoi(argv[3]);
+        cfg.K_registrationThreshold = std::stoi(argv[4]);
+        cfg.simulationDurationMinutes = std::stoi(argv[5]);
+        cfg.totalPatientsTarget = std::stoi(argv[6]);
+        cfg.timeScaleMsPerSimMinute = std::stoi(argv[7]);
+        cfg.randomSeed = static_cast<unsigned int>(std::stoul(argv[8]));
+        PatientGenerator gen;
+        return gen.run(argv[2], cfg);
+    }
+
+    if (argc >= 2 && std::string(argv[1]) == "patient") {
+        if (argc < 8) {
+            std::cerr << "Patient usage: " << argv[0]
+                      << " patient <keyPath> <id> <age> <isVip> <hasGuardian> <personsCount>"
+                      << std::endl;
+            return EXIT_FAILURE;
+        }
+        Patient pat;
+        int id = std::stoi(argv[3]);
+        int age = std::stoi(argv[4]);
+        bool isVip = std::stoi(argv[5]) != 0;
+        bool hasGuardian = std::stoi(argv[6]) != 0;
+        int personsCount = std::stoi(argv[7]);
+        return pat.run(argv[2], id, age, isVip, hasGuardian, personsCount);
     }
 
     Config cfg{};

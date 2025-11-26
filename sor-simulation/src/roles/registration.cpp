@@ -64,12 +64,15 @@ int Registration::run(const std::string& keyPath) {
         return 1;
     }
 
+    // Log includes PID via logger; message text focuses on patient ids/flags.
     logEvent(logQueue.id(), Role::Registration1, 0, "Registration started");
 
     while (!stopFlag.load()) {
         EventMessage ev{};
+        long baseType = static_cast<long>(EventType::PatientArrived);
+        // Use negative msgtyp to prioritize lower mtype (VIP first).
         ssize_t res = msgrcv(regQueue.id(), &ev, sizeof(EventMessage) - sizeof(long),
-                             0, 0);
+                             -baseType, 0);
         if (res == -1) {
             if (errno == EINTR && stopFlag.load()) {
                 break;
@@ -90,7 +93,10 @@ int Registration::run(const std::string& keyPath) {
         if (!triageQueue.send(&ev, sizeof(ev), ev.mtype)) {
             logErrno("Registration send to triage failed");
         } else {
-            logEvent(logQueue.id(), Role::Registration1, 0, "Forwarded patient to triage");
+            logEvent(logQueue.id(), Role::Registration1, 0,
+                     "Forwarded patient id=" + std::to_string(ev.patientId) +
+                     " vip=" + std::to_string(ev.isVip) +
+                     " persons=" + std::to_string(ev.personsCount));
         }
     }
 

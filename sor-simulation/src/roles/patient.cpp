@@ -1,5 +1,102 @@
 #include "roles/patient.hpp"
 
-int Patient::run() {
+#include "ipc/message_queue.hpp"
+#include "ipc/semaphore.hpp"
+#include "ipc/shared_memory.hpp"
+#include "logging/logger.hpp"
+#include "model/events.hpp"
+#include "model/shared_state.hpp"
+#include "model/types.hpp"
+#include "util/error.hpp"
+
+#include <atomic>
+#include <csignal>
+#include <cstring>
+#include <string>
+#include <sys/ipc.h>
+#include <unistd.h>
+
+namespace {
+std::atomic<bool> stopFlag(false);
+
+void handleSigusr2(int) {
+    stopFlag.store(true);
+}
+} // namespace
+
+int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip, bool hasGuardian, int personsCount) {
+    struct sigaction sa {};
+    sa.sa_handler = handleSigusr2;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGUSR2, &sa, nullptr);
+
+    MessageQueue regQueue;
+    MessageQueue logQueue;
+    Semaphore waitSem;
+    Semaphore stateSem;
+    SharedMemory shm;
+
+    key_t regKey = ftok(keyPath.c_str(), 'R');
+    key_t logKey = ftok(keyPath.c_str(), 'L');
+    key_t waitKey = ftok(keyPath.c_str(), 'W');
+    key_t stateKey = ftok(keyPath.c_str(), 'M');
+    key_t shmKey = ftok(keyPath.c_str(), 'H');
+
+    if (regKey == -1 || logKey == -1 || waitKey == -1 || stateKey == -1 || shmKey == -1) {
+        logErrno("Patient ftok failed");
+        return 1;
+    }
+    if (!regQueue.open(regKey) || !logQueue.open(logKey)) {
+        return 1;
+    }
+    if (!waitSem.open(waitKey) || !stateSem.open(stateKey)) {
+        return 1;
+    }
+    if (!shm.open(shmKey)) {
+        return 1;
+    }
+    auto* statePtr = static_cast<SharedState*>(shm.attach());
+    if (!statePtr) {
+        return 1;
+    }
+
+    // Acquire waiting room slots
+    for (int i = 0; i < personsCount; ++i) {
+        if (!waitSem.wait()) {
+            shm.detach(statePtr);
+            return 1;
+        }
+    }
+
+    // Update shared state: inside count and queue len
+    stateSem.wait();
+    statePtr->currentInWaitingRoom += personsCount;
+    statePtr->queueRegistrationLen += 1;
+    statePtr->totalPatients += 1;
+    stateSem.post();
+
+    logEvent(logQueue.id(), Role::Patient, 0,
+             "Patient arrived id=" + std::to_string(patientId) +
+             " age=" + std::to_string(age) +
+             " vip=" + std::string(isVip ? "1" : "0") +
+             " persons=" + std::to_string(personsCount) +
+             " guardian=" + std::string(hasGuardian ? "1" : "0"));
+
+    EventMessage ev{};
+    long baseType = static_cast<long>(EventType::PatientArrived);
+    // VIPs use lower mtype to be dequeued first with negative msgtyp in msgrcv.
+    ev.mtype = isVip ? baseType : baseType + 1;
+    ev.patientId = patientId;
+    ev.age = age;
+    ev.isVip = isVip ? 1 : 0;
+    ev.personsCount = personsCount;
+    std::strncpy(ev.extra, hasGuardian ? "guardian" : "solo", sizeof(ev.extra) - 1);
+
+    regQueue.send(&ev, sizeof(ev), ev.mtype);
+
+    // Patient process ends; waiting room slots will be released by triage (if sent home) or specialist outcome.
+    logEvent(logQueue.id(), Role::Patient, 0, "Patient registered id=" + std::to_string(patientId));
+    shm.detach(statePtr);
     return 0;
 }

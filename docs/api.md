@@ -167,12 +167,12 @@ This document describes the intended behavior, inputs, outputs, and example usag
 ### `PatientGenerator` (`roles/patient_generator.hpp/.cpp`)
 - **Purpose:** Periodically spawns `Patient` processes with randomized attributes.
 - **Method:**
-  - `int run();` → 0 on normal stop.
+  - `int run(const std::string& keyPath, const Config& cfg);` → 0 on normal stop. Forks/execs patient processes using config (totals/time scale/seed), passes attributes via argv; responds to SIGUSR2.
 
 ### `Patient` (`roles/patient.hpp/.cpp`)
 - **Purpose:** Models a single (possibly child+guardian) patient moving through SOR pipeline.
 - **Method:**
-  - `int run();` → 0 on completion or orderly SIGUSR2 shutdown.
+  - `int run(const std::string& keyPath, int patientId, int age, bool isVip, bool hasGuardian, int personsCount);` → 0 on completion or orderly SIGUSR2 shutdown. Opens IPC via `ftok(keyPath, ...)`, acquires waiting-room slots via semaphore, updates shared state, sends EventMessage to REGISTRATION queue, logs, releases resources.
 
 ### `Registration` (`roles/registration.hpp/.cpp`)
 - **Purpose:** Represents one registration window consuming from `REGISTRATION_QUEUE`.
@@ -182,12 +182,12 @@ This document describes the intended behavior, inputs, outputs, and example usag
 ### `Triage` (`roles/triage.hpp/.cpp`)
 - **Purpose:** Assigns triage color, optionally sends home, forwards to specialists.
 - **Method:**
-  - `int run();` → 0 on normal exit.
+  - `int run(const std::string& keyPath);` → 0 on normal exit. Opens IPC via `ftok(keyPath, ...)`, consumes from TRIAGE queue, ~5% send home (releasing waiting-room slots), otherwise assigns color (10/35/50 red/yellow/green), picks specialist, updates shared stats under semaphore, forwards to SPECIALISTS queue with mtype = base + specialistIdx for direct routing, logs patient id/color/spec, exits on SIGUSR2.
 
 ### `Specialist` (`roles/specialist.hpp/.cpp`)
 - **Purpose:** Handles one specialty; reacts to `SIGUSR1` (temporary leave) and `SIGUSR2` (shutdown).
 - **Method:**
-  - `int run();` → 0 on normal exit.
+  - `int run(const std::string& keyPath, SpecialistType type);` → 0 on normal exit. Opens IPC via `ftok(keyPath, ...)`, filters messages for its `type` from SPECIALISTS queue, simulates exam, updates outcomes (~85/14.5/0.5%) under shared-state semaphore, logs events, pauses on SIGUSR1 (simulated delay), exits on SIGUSR2. Director currently spawns all six types via exec args.
 
 **Role Example Launch (conceptual):**
 ```cpp

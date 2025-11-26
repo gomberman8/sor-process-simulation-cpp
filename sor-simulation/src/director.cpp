@@ -8,6 +8,8 @@
 #include "model/events.hpp"
 #include "model/shared_state.hpp"
 #include "model/types.hpp"
+#include "roles/triage.hpp"
+#include "roles/specialist.hpp"
 #include "util/error.hpp"
 
 #include <sys/ipc.h>
@@ -21,6 +23,7 @@
 #include <vector>
 #include <unistd.h>
 #include <signal.h>
+#include <algorithm>
 
 namespace {
 struct IpcIds {
@@ -210,10 +213,104 @@ int Director::run(const std::string& selfPath, const Config& config) {
         }
     }
 
-    // For now, immediately shutdown roles to demonstrate lifecycle.
-    if (reg1Pid > 0) {
-        kill(reg1Pid, SIGUSR2);
+    pid_t triagePid = -1;
+    if (ok) {
+        triagePid = fork();
+        if (triagePid == -1) {
+            logErrno("fork for triage failed");
+            ok = false;
+        } else if (triagePid == 0) {
+            std::vector<char*> args;
+            args.push_back(const_cast<char*>(selfPath.c_str()));
+            args.push_back(const_cast<char*>("triage"));
+            args.push_back(const_cast<char*>(selfPath.c_str())); // key path
+            args.push_back(nullptr);
+            execv(selfPath.c_str(), args.data());
+            logErrno("execv for triage failed");
+            _exit(1);
+        } else {
+            if (shared) {
+                shared->triagePid = triagePid;
+            }
+            logEvent(ids.logQueue, Role::Director, 0, "Triage spawned");
+        }
     }
+
+    pid_t generatorPid = -1;
+    if (ok) {
+        generatorPid = fork();
+        if (generatorPid == -1) {
+            logErrno("fork for patient generator failed");
+            ok = false;
+        } else if (generatorPid == 0) {
+            // pass config values as args
+            std::vector<std::string> argVals = {
+                std::to_string(config.N_waitingRoom),
+                std::to_string(config.K_registrationThreshold),
+                std::to_string(config.simulationDurationMinutes),
+                std::to_string(config.totalPatientsTarget),
+                std::to_string(config.timeScaleMsPerSimMinute),
+                std::to_string(config.randomSeed)
+            };
+            std::vector<char*> args;
+            args.push_back(const_cast<char*>(selfPath.c_str()));
+            args.push_back(const_cast<char*>("patient_generator"));
+            args.push_back(const_cast<char*>(selfPath.c_str())); // key path
+            for (auto& s : argVals) {
+                args.push_back(const_cast<char*>(s.c_str()));
+            }
+            args.push_back(nullptr);
+            execv(selfPath.c_str(), args.data());
+            logErrno("execv for patient generator failed");
+            _exit(1);
+        } else {
+            logEvent(ids.logQueue, Role::Director, 0, "Patient generator spawned");
+        }
+    }
+
+    std::vector<pid_t> specialistPids;
+    if (ok) {
+        int specCount = 6;
+        for (int i = 0; i < specCount; ++i) {
+            pid_t pid = fork();
+            if (pid == -1) {
+                logErrno("fork for specialist failed");
+                ok = false;
+                break;
+            } else if (pid == 0) {
+                std::string typeStr = std::to_string(i);
+                std::vector<char*> args;
+                args.push_back(const_cast<char*>(selfPath.c_str()));
+                args.push_back(const_cast<char*>("specialist"));
+                args.push_back(const_cast<char*>(selfPath.c_str())); // key path
+                args.push_back(const_cast<char*>(typeStr.c_str()));
+                args.push_back(nullptr);
+                execv(selfPath.c_str(), args.data());
+                logErrno("execv for specialist failed");
+                _exit(1);
+            } else {
+                specialistPids.push_back(pid);
+                logEvent(ids.logQueue, Role::Director, 0, "Specialist spawned type " + std::to_string(i));
+            }
+        }
+    }
+
+    // Let simulation run for configured duration (scaled).
+    long long remainingMs = static_cast<long long>(config.simulationDurationMinutes) *
+                            static_cast<long long>(config.timeScaleMsPerSimMinute);
+    const int chunkMs = 100;
+    while (remainingMs > 0) {
+        usleep(static_cast<useconds_t>(std::min<long long>(chunkMs, remainingMs) * 1000));
+        remainingMs -= chunkMs;
+    }
+
+    logEvent(ids.logQueue, Role::Director, 0, "Director initiating shutdown");
+    if (reg1Pid > 0) kill(reg1Pid, SIGUSR2);
+    if (triagePid > 0) kill(triagePid, SIGUSR2);
+    for (pid_t pid : specialistPids) {
+        if (pid > 0) kill(pid, SIGUSR2);
+    }
+    if (generatorPid > 0) kill(generatorPid, SIGUSR2);
 
     // send termination marker for logger
     if (ok) {
@@ -224,6 +321,26 @@ int Director::run(const std::string& selfPath, const Config& config) {
     if (reg1Pid > 0) {
         if (waitpid(reg1Pid, nullptr, 0) == -1) {
             logErrno("waitpid for registration failed");
+            ok = false;
+        }
+    }
+    if (triagePid > 0) {
+        if (waitpid(triagePid, nullptr, 0) == -1) {
+            logErrno("waitpid for triage failed");
+            ok = false;
+        }
+    }
+    for (pid_t pid : specialistPids) {
+        if (pid > 0) {
+            if (waitpid(pid, nullptr, 0) == -1) {
+                logErrno("waitpid for specialist failed");
+                ok = false;
+            }
+        }
+    }
+    if (generatorPid > 0) {
+        if (waitpid(generatorPid, nullptr, 0) == -1) {
+            logErrno("waitpid for generator failed");
             ok = false;
         }
     }
