@@ -10,6 +10,7 @@
 #include <atomic>
 #include <csignal>
 #include <string>
+#include <vector>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -30,6 +31,7 @@ int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
 
     RandomGenerator rng(cfg.randomSeed);
     int spawned = 0;
+    std::vector<pid_t> children;
 
     while (!stopFlag.load() && spawned < cfg.totalPatientsTarget) {
         int age = rng.uniformInt(1, 90);
@@ -64,12 +66,22 @@ int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
             _exit(1);
         }
 
+        children.push_back(pid);
         spawned++;
         int sleepMs = cfg.timeScaleMsPerSimMinute;
         usleep(static_cast<useconds_t>(sleepMs * 1000));
     }
 
-    // Wait for children to finish (fire and forget here).
-    while (waitpid(-1, nullptr, WNOHANG) > 0) {}
+    // On shutdown or completion, signal remaining children and wait.
+    for (pid_t c : children) {
+        if (c > 0) {
+            kill(c, SIGUSR2);
+        }
+    }
+    for (pid_t c : children) {
+        if (c > 0) {
+            waitpid(c, nullptr, 0);
+        }
+    }
     return 0;
 }

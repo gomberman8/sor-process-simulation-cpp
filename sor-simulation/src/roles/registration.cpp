@@ -74,7 +74,7 @@ int Registration::run(const std::string& keyPath) {
         ssize_t res = msgrcv(regQueue.id(), &ev, sizeof(EventMessage) - sizeof(long),
                              -baseType, 0);
         if (res == -1) {
-            if (errno == EINTR && stopFlag.load()) {
+            if ((errno == EINTR && stopFlag.load()) || errno == EIDRM || errno == EINVAL) {
                 break;
             }
             logErrno("Registration msgrcv failed");

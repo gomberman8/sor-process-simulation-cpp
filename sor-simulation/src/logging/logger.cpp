@@ -123,7 +123,9 @@ bool logEvent(int queueId, Role role, int simTime, const std::string& text) {
     std::strncpy(msg.text, text.c_str(), sizeof(msg.text) - 1);
     size_t payloadSize = sizeof(LogMessage) - sizeof(long);
     if (msgsnd(queueId, &msg, payloadSize, 0) == -1) {
-        logErrno("logEvent msgsnd failed");
+        if (errno != EIDRM && errno != EINVAL) {
+            logErrno("logEvent msgsnd failed");
+        }
         return false;
     }
     return true;

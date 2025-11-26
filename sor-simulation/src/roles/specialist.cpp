@@ -110,7 +110,7 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
         ssize_t res = msgrcv(specQueue.id(), &ev, sizeof(EventMessage) - sizeof(long),
                              myType, 0);
         if (res == -1) {
-            if (errno == EINTR && stopFlag.load()) {
+            if ((errno == EINTR && stopFlag.load()) || errno == EIDRM || errno == EINVAL) {
                 break;
             }
             continue;

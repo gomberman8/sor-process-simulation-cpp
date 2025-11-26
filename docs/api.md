@@ -159,6 +159,7 @@ This document describes the intended behavior, inputs, outputs, and example usag
   - `int run(const std::string& selfPath, const Config& config);`
     - Expected to return `0` on clean shutdown; non-zero on failure.
     - `selfPath` is used to `exec` child roles (logger now, later others).
+    - Director initializes SysV IPC (queues, semaphores, shared memory) via `ftok`, spawns Logger, Registration1, Triage, all Specialists, and PatientGenerator via fork+exec of the same binary. Uses a process group and sends SIGUSR2 to the whole group for shutdown; force-kills stragglers after a timeout, then IPC_RMID.
 - **Example:**  
   ```cpp
   int main() { Director d; return d.run(); }

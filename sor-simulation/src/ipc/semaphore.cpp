@@ -31,6 +31,9 @@ bool Semaphore::wait() {
     }
     struct sembuf op {0, -1, 0};
     if (semop(semId, &op, 1) == -1) {
+        if (errno == EIDRM || errno == EINVAL || errno == EINTR) {
+            return false;
+        }
         logErrno("semop wait failed");
         return false;
     }
@@ -44,6 +47,9 @@ bool Semaphore::post() {
     }
     struct sembuf op {0, 1, 0};
     if (semop(semId, &op, 1) == -1) {
+        if (errno == EIDRM || errno == EINVAL || errno == EINTR) {
+            return false;
+        }
         logErrno("semop post failed");
         return false;
     }

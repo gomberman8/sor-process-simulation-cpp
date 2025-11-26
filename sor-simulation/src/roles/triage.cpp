@@ -93,7 +93,7 @@ int Triage::run(const std::string& keyPath) {
         ssize_t res = msgrcv(triageQueue.id(), &ev, sizeof(EventMessage) - sizeof(long),
                              0, 0);
         if (res == -1) {
-            if (errno == EINTR && stopFlag.load()) {
+            if ((errno == EINTR && stopFlag.load()) || errno == EIDRM || errno == EINVAL) {
                 break;
             }
             logErrno("Triage msgrcv failed");

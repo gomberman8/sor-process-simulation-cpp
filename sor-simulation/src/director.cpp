@@ -24,6 +24,8 @@
 #include <unistd.h>
 #include <signal.h>
 #include <algorithm>
+#include <chrono>
+#include <thread>
 
 namespace {
 struct IpcIds {
@@ -35,6 +37,25 @@ struct IpcIds {
     int semWaitingRoom{-1};
     int semSharedState{-1};
 };
+
+/**
+ * @brief Helper to place child processes into a dedicated process group so we can signal them together.
+ *
+ * We keep the director out of killpg by using the first child as the pgid anchor; subsequent children join that group.
+ * This avoids self-terminating the director (previously kill(0, SIGUSR2) would also kill the director).
+ */
+bool addToGroup(pid_t childPid, pid_t& groupId) {
+    if (childPid <= 0) return false;
+    pid_t target = (groupId == -1) ? childPid : groupId;
+    if (setpgid(childPid, target) == -1) {
+        logErrno("setpgid failed");
+        return false;
+    }
+    if (groupId == -1) {
+        groupId = target;
+    }
+    return true;
+}
 
 bool createQueues(const std::string& keyPath, IpcIds& ids) {
     MessageQueue logQ;
@@ -142,6 +163,7 @@ int Director::run(const std::string& selfPath, const Config& config) {
     IpcIds ids;
     SharedState* shared = nullptr;
     bool ok = true;
+    pid_t groupId = -1; // process group for children
 
     if (!createQueues(selfPath, ids)) {
         ok = false;
@@ -173,6 +195,7 @@ int Director::run(const std::string& selfPath, const Config& config) {
             logErrno("execv for logger failed");
             _exit(1);
         }
+        addToGroup(loggerPid, groupId);
     }
 
     if (ok && shared) {
@@ -212,6 +235,7 @@ int Director::run(const std::string& selfPath, const Config& config) {
             logEvent(ids.logQueue, Role::Director, 0, "Registration1 spawned");
         }
     }
+    addToGroup(reg1Pid, groupId);
 
     pid_t triagePid = -1;
     if (ok) {
@@ -235,6 +259,7 @@ int Director::run(const std::string& selfPath, const Config& config) {
             logEvent(ids.logQueue, Role::Director, 0, "Triage spawned");
         }
     }
+    addToGroup(triagePid, groupId);
 
     pid_t generatorPid = -1;
     if (ok) {
@@ -267,6 +292,7 @@ int Director::run(const std::string& selfPath, const Config& config) {
             logEvent(ids.logQueue, Role::Director, 0, "Patient generator spawned");
         }
     }
+    addToGroup(generatorPid, groupId);
 
     std::vector<pid_t> specialistPids;
     if (ok) {
@@ -294,6 +320,9 @@ int Director::run(const std::string& selfPath, const Config& config) {
             }
         }
     }
+    for (pid_t pid : specialistPids) {
+        addToGroup(pid, groupId);
+    }
 
     // Let simulation run for configured duration (scaled).
     long long remainingMs = static_cast<long long>(config.simulationDurationMinutes) *
@@ -304,52 +333,50 @@ int Director::run(const std::string& selfPath, const Config& config) {
         remainingMs -= chunkMs;
     }
 
-    logEvent(ids.logQueue, Role::Director, 0, "Director initiating shutdown");
-    if (reg1Pid > 0) kill(reg1Pid, SIGUSR2);
-    if (triagePid > 0) kill(triagePid, SIGUSR2);
-    for (pid_t pid : specialistPids) {
-        if (pid > 0) kill(pid, SIGUSR2);
+    // Coordinated shutdown: send SIGUSR2 to child process group, then force-kill stragglers.
+    logEvent(ids.logQueue, Role::Director, 0, "Director initiating shutdown (SIGUSR2 to child group)");
+    if (groupId > 0) {
+        killpg(groupId, SIGUSR2);
     }
-    if (generatorPid > 0) kill(generatorPid, SIGUSR2);
 
     // send termination marker for logger
     if (ok) {
         logEvent(ids.logQueue, Role::Director, 0, "END");
     }
 
-    int status = 0;
-    if (reg1Pid > 0) {
-        if (waitpid(reg1Pid, nullptr, 0) == -1) {
-            logErrno("waitpid for registration failed");
-            ok = false;
-        }
-    }
-    if (triagePid > 0) {
-        if (waitpid(triagePid, nullptr, 0) == -1) {
-            logErrno("waitpid for triage failed");
-            ok = false;
-        }
-    }
-    for (pid_t pid : specialistPids) {
-        if (pid > 0) {
-            if (waitpid(pid, nullptr, 0) == -1) {
-                logErrno("waitpid for specialist failed");
-                ok = false;
+    auto waitWithTimeout = [&](pid_t pid, const std::string& name) {
+        if (pid <= 0) return;
+        int status = 0;
+        auto start = std::chrono::steady_clock::now();
+        while (true) {
+            pid_t res = waitpid(pid, &status, WNOHANG);
+            if (res == pid) {
+                return;
             }
+            if (res == -1) {
+                logErrno("waitpid for " + name + " failed");
+                return;
+            }
+            auto elapsed = std::chrono::steady_clock::now() - start;
+            if (std::chrono::duration_cast<std::chrono::seconds>(elapsed).count() >= 5) {
+                kill(pid, SIGKILL);
+                logEvent(ids.logQueue, Role::Director, 0, "Force killed " + name);
+                waitpid(pid, nullptr, 0);
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
+    };
+
+    waitWithTimeout(reg1Pid, "registration");
+    waitWithTimeout(triagePid, "triage");
+    for (pid_t pid : specialistPids) {
+        waitWithTimeout(pid, "specialist");
     }
-    if (generatorPid > 0) {
-        if (waitpid(generatorPid, nullptr, 0) == -1) {
-            logErrno("waitpid for generator failed");
-            ok = false;
-        }
-    }
-    if (loggerPid > 0) {
-        if (waitpid(loggerPid, &status, 0) == -1) {
-            logErrno("waitpid for logger failed");
-            ok = false;
-        }
-    }
+    waitWithTimeout(generatorPid, "patient_generator");
+    waitWithTimeout(loggerPid, "logger");
+
+    int status = 0;
 
     destroyIpc(ids, shared);
 
