@@ -14,6 +14,7 @@
 #include <csignal>
 #include <cstring>
 #include <string>
+#include <ctime>
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <unistd.h>
@@ -49,9 +50,30 @@ Role roleForType(SpecialistType t) {
         default: return Role::SpecialistCardio;
     }
 }
+
+long long monotonicMs() {
+    struct timespec ts {};
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) return 0;
+    return static_cast<long long>(ts.tv_sec) * 1000LL + ts.tv_nsec / 1000000LL;
+}
+
+int currentSimMinutes(const SharedState* state) {
+    if (!state || state->timeScaleMsPerSimMinute <= 0) return 0;
+    long long now = monotonicMs();
+    long long delta = now - state->simStartMonotonicMs;
+    if (delta < 0) delta = 0;
+    return static_cast<int>(delta / state->timeScaleMsPerSimMinute);
+}
 } // namespace
 
 int Specialist::run(const std::string& keyPath, SpecialistType type) {
+    // Ignore SIGINT so only SIGUSR2/SIGUSR1 manage lifecycle.
+    struct sigaction saIgnore {};
+    saIgnore.sa_handler = SIG_IGN;
+    sigemptyset(&saIgnore.sa_mask);
+    saIgnore.sa_flags = 0;
+    sigaction(SIGINT, &saIgnore, nullptr);
+
     struct sigaction sa1 {};
     sa1.sa_handler = handleSigusr1;
     sigemptyset(&sa1.sa_mask);
@@ -95,7 +117,8 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
     }
 
     Role asRole = roleForType(type);
-    logEvent(logQueue.id(), asRole, 0, "Specialist " + specToString(type) + " started");
+    int simTime = currentSimMinutes(statePtr);
+    logEvent(logQueue.id(), asRole, simTime, "Specialist " + specToString(type) + " started");
     RandomGenerator rng;
 
     while (!stopFlag.load()) {
@@ -103,7 +126,8 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
             int pauseMs = rng.uniformInt(100, 500);
             usleep(static_cast<useconds_t>(pauseMs * 1000));
             pausedFlag.store(false);
-            logEvent(logQueue.id(), asRole, 0, "SIGUSR1: temporary leave finished");
+            simTime = currentSimMinutes(statePtr);
+            logEvent(logQueue.id(), asRole, simTime, "SIGUSR1: temporary leave finished");
         }
 
         EventMessage ev{};
@@ -118,7 +142,8 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
             continue;
         }
 
-        logEvent(logQueue.id(), asRole, 0,
+        simTime = currentSimMinutes(statePtr);
+        logEvent(logQueue.id(), asRole, simTime,
                  "Received patient id=" + std::to_string(ev.patientId) +
                  " color=" + std::to_string(ev.triageColor) +
                  " persons=" + std::to_string(ev.personsCount));
@@ -155,7 +180,8 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
         else if (outcomeRand < 995) outcomeText = "ward";
         else outcomeText = "otherFacility";
 
-        logEvent(logQueue.id(), asRole, 0,
+        simTime = currentSimMinutes(statePtr);
+        logEvent(logQueue.id(), asRole, simTime,
                  "Handled patient id=" + std::to_string(ev.patientId) +
                  " outcome=" + outcomeText +
                  " persons=" + std::to_string(ev.personsCount) +
@@ -164,10 +190,11 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
                  " waitingRoom=" + std::to_string(inside) + "/" + std::to_string(capacity));
     }
 
+    simTime = currentSimMinutes(statePtr);
     if (sigusr2Seen.load()) {
-        logEvent(logQueue.id(), asRole, 0, "Specialist shutting down (SIGUSR2)");
+        logEvent(logQueue.id(), asRole, simTime, "Specialist shutting down (SIGUSR2)");
     } else {
-        logEvent(logQueue.id(), asRole, 0, "Specialist shutting down");
+        logEvent(logQueue.id(), asRole, simTime, "Specialist shutting down");
     }
     shm.detach(statePtr);
     return 0;

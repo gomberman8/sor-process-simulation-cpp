@@ -15,6 +15,7 @@
 #include <csignal>
 #include <string>
 #include <vector>
+#include <ctime>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <sys/ipc.h>
@@ -27,9 +28,38 @@ void handleSigusr2(int) {
     stopFlag.store(true);
     sigusr2Seen.store(true);
 }
+
+long long monotonicMs() {
+    struct timespec ts {};
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) return 0;
+    return static_cast<long long>(ts.tv_sec) * 1000LL + ts.tv_nsec / 1000000LL;
+}
+
+int currentSimMinutes(const SharedState* state) {
+    if (!state || state->timeScaleMsPerSimMinute <= 0) return 0;
+    long long now = monotonicMs();
+    long long delta = now - state->simStartMonotonicMs;
+    if (delta < 0) delta = 0;
+    return static_cast<int>(delta / state->timeScaleMsPerSimMinute);
+}
+
+int currentRealMinutes(const SharedState* state) {
+    if (!state) return 0;
+    long long now = monotonicMs();
+    long long delta = now - state->simStartMonotonicMs;
+    if (delta < 0) delta = 0;
+    return static_cast<int>(delta / 60000);
+}
 } // namespace
 
 int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
+    // Ignore SIGINT so director controls shutdown via SIGUSR2.
+    struct sigaction saIgnore {};
+    saIgnore.sa_handler = SIG_IGN;
+    sigemptyset(&saIgnore.sa_mask);
+    saIgnore.sa_flags = 0;
+    sigaction(SIGINT, &saIgnore, nullptr);
+
     struct sigaction sa {};
     sa.sa_handler = handleSigusr2;
     sigemptyset(&sa.sa_mask);
@@ -56,14 +86,22 @@ int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
     if (shmKey != -1 && semKey != -1 && shm.open(shmKey) && stateSem.open(semKey)) {
         statePtr = static_cast<SharedState*>(shm.attach());
     }
+    int simTime = currentSimMinutes(statePtr);
     if (logId != -1) {
-        logEvent(logId, Role::PatientGenerator, 0,
+        logEvent(logId, Role::PatientGenerator, simTime,
                  infiniteFlow ? "PatientGenerator running in infinite mode (until SIGUSR2)"
                               : "PatientGenerator target=" + std::to_string(cfg.totalPatientsTarget));
     }
     std::vector<pid_t> children;
 
     while (!stopFlag.load() && (infiniteFlow || spawned < cfg.totalPatientsTarget)) {
+        // Stop when real duration elapsed (if shared state present).
+        if (statePtr && statePtr->simulationDurationMinutes > 0 &&
+            currentRealMinutes(statePtr) >= statePtr->simulationDurationMinutes) {
+            stopFlag.store(true);
+            break;
+        }
+
         // Backpressure: avoid exceeding system process limits and waiting-room capacity.
         const size_t maxChildren = 200; // cap concurrent patient processes to avoid fork errors
         while (!stopFlag.load() && children.size() >= maxChildren) {
@@ -106,7 +144,8 @@ int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
         if (pid == -1) {
             // Fork can fail if zombie children accumulate or system is at process limit.
             if (logId != -1) {
-                logEvent(logId, Role::PatientGenerator, 0, "PatientGenerator fork failed, backing off");
+                simTime = currentSimMinutes(statePtr);
+                logEvent(logId, Role::PatientGenerator, simTime, "PatientGenerator fork failed, backing off");
             } else {
                 logErrno("PatientGenerator fork failed");
             }
@@ -166,7 +205,8 @@ int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
         }
     }
     if (logId != -1) {
-        logEvent(logId, Role::PatientGenerator, 0,
+        simTime = currentSimMinutes(statePtr);
+        logEvent(logId, Role::PatientGenerator, simTime,
                  sigusr2Seen.load() ? "PatientGenerator stopping (SIGUSR2)" : "PatientGenerator stopping");
     }
     return 0;

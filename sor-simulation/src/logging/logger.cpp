@@ -8,6 +8,7 @@
 #include <sys/msg.h>
 #include <cstring>
 #include <iostream>
+#include <signal.h>
 
 #include "model/events.hpp"
 #include "model/types.hpp"
@@ -73,6 +74,13 @@ std::string roleToString(int roleInt) {
 } // namespace
 
 int runLogger(int queueId, const std::string& path) {
+    // Ignore SIGINT so logger survives Ctrl+C until it receives END.
+    struct sigaction saIgnore {};
+    saIgnore.sa_handler = SIG_IGN;
+    sigemptyset(&saIgnore.sa_mask);
+    saIgnore.sa_flags = 0;
+    sigaction(SIGINT, &saIgnore, nullptr);
+
     Logger logger(path);
     if (queueId == -1) {
         logErrno("runLogger invalid queue id");

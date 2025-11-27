@@ -15,6 +15,7 @@
 #include <string>
 #include <sys/ipc.h>
 #include <sys/msg.h>
+#include <ctime>
 #include <unistd.h>
 
 namespace {
@@ -23,9 +24,30 @@ std::atomic<bool> stopFlag(false);
 void handleSigusr2(int) {
     stopFlag.store(true);
 }
+
+long long monotonicMs() {
+    struct timespec ts {};
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) return 0;
+    return static_cast<long long>(ts.tv_sec) * 1000LL + ts.tv_nsec / 1000000LL;
+}
+
+int currentSimMinutes(const SharedState* state) {
+    if (!state || state->timeScaleMsPerSimMinute <= 0) return 0;
+    long long now = monotonicMs();
+    long long delta = now - state->simStartMonotonicMs;
+    if (delta < 0) delta = 0;
+    return static_cast<int>(delta / state->timeScaleMsPerSimMinute);
+}
 } // namespace
 
 int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip, bool hasGuardian, int personsCount) {
+    // Ignore SIGINT so only SIGUSR2 controls shutdown.
+    struct sigaction saIgnore {};
+    saIgnore.sa_handler = SIG_IGN;
+    sigemptyset(&saIgnore.sa_mask);
+    saIgnore.sa_flags = 0;
+    sigaction(SIGINT, &saIgnore, nullptr);
+
     struct sigaction sa {};
     sa.sa_handler = handleSigusr2;
     sigemptyset(&sa.sa_mask);
@@ -63,7 +85,8 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
     }
 
     // Log that patient is queued outside waiting for a slot.
-    logEvent(logQueue.id(), Role::Patient, 0,
+    int simTime = currentSimMinutes(statePtr);
+    logEvent(logQueue.id(), Role::Patient, simTime,
              "Patient waiting to enter waiting room id=" + std::to_string(patientId) +
              " persons=" + std::to_string(personsCount));
 
@@ -84,7 +107,8 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
     int capacity = statePtr->waitingRoomCapacity;
     stateSem.post();
 
-    logEvent(logQueue.id(), Role::Patient, 0,
+    simTime = currentSimMinutes(statePtr);
+    logEvent(logQueue.id(), Role::Patient, simTime,
              "Patient arrived id=" + std::to_string(patientId) +
              " age=" + std::to_string(age) +
              " vip=" + std::string(isVip ? "1" : "0") +
@@ -115,7 +139,8 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
     }
 
     // Patient process ends; waiting room slots will be released by triage (if sent home) or specialist outcome.
-    logEvent(logQueue.id(), Role::Patient, 0, "Patient registered id=" + std::to_string(patientId));
+    simTime = currentSimMinutes(statePtr);
+    logEvent(logQueue.id(), Role::Patient, simTime, "Patient registered id=" + std::to_string(patientId));
     shm.detach(statePtr);
     return 0;
 }

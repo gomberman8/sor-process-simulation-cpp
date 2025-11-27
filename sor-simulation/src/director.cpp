@@ -41,9 +41,41 @@ struct IpcIds {
 };
 
 std::atomic<bool> stopRequested(false);
+std::atomic<bool> sigusr2Requested(false);
+std::atomic<bool> sigintRequested(false);
 
 void handleSigint(int) {
     stopRequested.store(true);
+    sigintRequested.store(true);
+}
+
+void handleSigusr2(int) {
+    sigusr2Requested.store(true);
+    stopRequested.store(true);
+}
+
+long long monotonicMs() {
+    struct timespec ts {};
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) {
+        return 0;
+    }
+    return static_cast<long long>(ts.tv_sec) * 1000LL + ts.tv_nsec / 1000000LL;
+}
+
+int simMinutesFrom(long long startMs, int scaleMsPerMinute) {
+    if (startMs == 0 || scaleMsPerMinute <= 0) return 0;
+    long long now = monotonicMs();
+    long long delta = now - startMs;
+    if (delta < 0) delta = 0;
+    return static_cast<int>(delta / scaleMsPerMinute);
+}
+
+int realMinutesFrom(long long startMs) {
+    if (startMs == 0) return 0;
+    long long now = monotonicMs();
+    long long delta = now - startMs;
+    if (delta < 0) delta = 0;
+    return static_cast<int>(delta / 60000); // 60s * 1000ms
 }
 
 bool createQueues(const std::string& keyPath, IpcIds& ids) {
@@ -60,6 +92,18 @@ bool createQueues(const std::string& keyPath, IpcIds& ids) {
         logErrno("ftok failed");
         return false;
     }
+
+    // Best effort: remove stale queues from previous crashed runs.
+    auto removeIfExists = [](key_t key) {
+        int qid = msgget(key, 0);
+        if (qid != -1) {
+            msgctl(qid, IPC_RMID, nullptr);
+        }
+    };
+    removeIfExists(logKey);
+    removeIfExists(regKey);
+    removeIfExists(triKey);
+    removeIfExists(specKey);
 
     if (!logQ.create(logKey, 0600) || !regQ.create(regKey, 0600) ||
         !triQ.create(triKey, 0600) || !specQ.create(specKey, 0600)) {
@@ -93,6 +137,16 @@ bool createSemaphores(const std::string& keyPath, const Config& cfg, IpcIds& ids
         return false;
     }
 
+    // Best effort cleanup of stale semaphores from previous crashed runs.
+    auto removeIfExists = [](key_t key) {
+        int sid = semget(key, 1, 0);
+        if (sid != -1) {
+            semctl(sid, 0, IPC_RMID);
+        }
+    };
+    removeIfExists(waitKey);
+    removeIfExists(stateKey);
+
     Semaphore waitSem;
     Semaphore stateSem;
     if (!waitSem.create(waitKey, cfg.N_waitingRoom, 0600)) {
@@ -117,6 +171,11 @@ bool createSharedState(const std::string& keyPath, IpcIds& ids, SharedState*& st
         logErrno("ftok for shm failed");
         return false;
     }
+    // Remove stale shared memory if present (previous crash).
+    int staleId = shmget(shmKey, 0, 0);
+    if (staleId != -1) {
+        shmctl(staleId, IPC_RMID, nullptr);
+    }
     if (!shm.create(shmKey, sizeof(SharedState), 0600)) {
         return false;
     }
@@ -137,25 +196,39 @@ void destroyIpc(const IpcIds& ids, SharedState* attachedState) {
         shmdt(attachedState);
     }
     if (ids.logQueue != -1) {
-        msgctl(ids.logQueue, IPC_RMID, nullptr);
+        if (msgctl(ids.logQueue, IPC_RMID, nullptr) == -1) {
+            logErrno("cleanup log queue failed");
+        }
     }
     if (ids.regQueue != -1) {
-        msgctl(ids.regQueue, IPC_RMID, nullptr);
+        if (msgctl(ids.regQueue, IPC_RMID, nullptr) == -1) {
+            logErrno("cleanup reg queue failed");
+        }
     }
     if (ids.triageQueue != -1) {
-        msgctl(ids.triageQueue, IPC_RMID, nullptr);
+        if (msgctl(ids.triageQueue, IPC_RMID, nullptr) == -1) {
+            logErrno("cleanup triage queue failed");
+        }
     }
     if (ids.specialistsQueue != -1) {
-        msgctl(ids.specialistsQueue, IPC_RMID, nullptr);
+        if (msgctl(ids.specialistsQueue, IPC_RMID, nullptr) == -1) {
+            logErrno("cleanup specialists queue failed");
+        }
     }
     if (ids.shmId != -1) {
-        shmctl(ids.shmId, IPC_RMID, nullptr);
+        if (shmctl(ids.shmId, IPC_RMID, nullptr) == -1) {
+            logErrno("cleanup shm failed");
+        }
     }
     if (ids.semWaitingRoom != -1) {
-        semctl(ids.semWaitingRoom, 0, IPC_RMID);
+        if (semctl(ids.semWaitingRoom, 0, IPC_RMID) == -1) {
+            logErrno("cleanup waiting room semaphore failed");
+        }
     }
     if (ids.semSharedState != -1) {
-        semctl(ids.semSharedState, 0, IPC_RMID);
+        if (semctl(ids.semSharedState, 0, IPC_RMID) == -1) {
+            logErrno("cleanup shared state semaphore failed");
+        }
     }
 }
 } // namespace
@@ -205,12 +278,23 @@ int Director::run(const std::string& selfPath, const Config& config) {
     sigemptyset(&saInt.sa_mask);
     saInt.sa_flags = 0;
     sigaction(SIGINT, &saInt, nullptr);
+    struct sigaction saUsr2 {};
+    saUsr2.sa_handler = handleSigusr2;
+    sigemptyset(&saUsr2.sa_mask);
+    saUsr2.sa_flags = 0;
+    sigaction(SIGUSR2, &saUsr2, nullptr);
 
+    long long simStartMs = monotonicMs();
+    auto simNow = [&]() { return simMinutesFrom(simStartMs, config.timeScaleMsPerSimMinute); };
+    auto realNow = [&]() { return realMinutesFrom(simStartMs); };
     if (ok && shared) {
         shared->currentInWaitingRoom = 0;
         shared->waitingRoomCapacity = config.N_waitingRoom;
         shared->queueRegistrationLen = 0;
         shared->reg2Active = 0;
+        shared->timeScaleMsPerSimMinute = config.timeScaleMsPerSimMinute;
+        shared->simulationDurationMinutes = config.simulationDurationMinutes;
+        shared->simStartMonotonicMs = simStartMs;
         shared->totalPatients = 0;
         shared->triageRed = shared->triageYellow = shared->triageGreen = shared->triageSentHome = 0;
         shared->outcomeHome = shared->outcomeWard = shared->outcomeOther = 0;
@@ -225,8 +309,9 @@ int Director::run(const std::string& selfPath, const Config& config) {
     }
 
     if (ok) {
-        logEvent(ids.logQueue, Role::Director, 0, "Director: IPC initialized, logger spawned: " + logPath);
-        logEvent(ids.logQueue, Role::Director, 0,
+        int simTime = simNow();
+        logEvent(ids.logQueue, Role::Director, simTime, "Director: IPC initialized, logger spawned: " + logPath);
+        logEvent(ids.logQueue, Role::Director, simTime,
                  "Simulation config N=" + std::to_string(config.N_waitingRoom) +
                  " K=" + std::to_string(config.K_registrationThreshold) +
                  " simMinutes=" + std::to_string(config.simulationDurationMinutes) +
@@ -254,7 +339,7 @@ int Director::run(const std::string& selfPath, const Config& config) {
             if (shared) {
                 shared->registration1Pid = reg1Pid;
             }
-            logEvent(ids.logQueue, Role::Director, 0, "Registration1 spawned");
+            logEvent(ids.logQueue, Role::Director, simNow(), "Registration1 spawned");
         }
     }
     pid_t triagePid = -1;
@@ -276,7 +361,7 @@ int Director::run(const std::string& selfPath, const Config& config) {
             if (shared) {
                 shared->triagePid = triagePid;
             }
-            logEvent(ids.logQueue, Role::Director, 0, "Triage spawned");
+            logEvent(ids.logQueue, Role::Director, simNow(), "Triage spawned");
         }
     }
 
@@ -308,7 +393,7 @@ int Director::run(const std::string& selfPath, const Config& config) {
             logErrno("execv for patient generator failed");
             _exit(1);
         } else {
-            logEvent(ids.logQueue, Role::Director, 0, "Patient generator spawned");
+            logEvent(ids.logQueue, Role::Director, simNow(), "Patient generator spawned");
         }
     }
     std::vector<pid_t> specialistPids;
@@ -333,7 +418,7 @@ int Director::run(const std::string& selfPath, const Config& config) {
                 _exit(1);
             } else {
                 specialistPids.push_back(pid);
-                logEvent(ids.logQueue, Role::Director, 0, "Specialist spawned type " + std::to_string(i));
+                logEvent(ids.logQueue, Role::Director, simNow(), "Specialist spawned type " + std::to_string(i));
             }
         }
     }
@@ -354,7 +439,7 @@ int Director::run(const std::string& selfPath, const Config& config) {
             auto elapsed = std::chrono::steady_clock::now() - start;
             if (std::chrono::duration_cast<std::chrono::seconds>(elapsed).count() >= 5) {
                 kill(pid, SIGKILL);
-                logEvent(ids.logQueue, Role::Director, 0, "Force killed " + name);
+                logEvent(ids.logQueue, Role::Director, simNow(), "Force killed " + name);
                 waitpid(pid, nullptr, 0);
                 return;
             }
@@ -362,13 +447,22 @@ int Director::run(const std::string& selfPath, const Config& config) {
         }
     };
 
-    // Run until user interruption (Ctrl+C). SOR works "24/7" until SIGUSR2 requested.
+    // Run until user interruption (Ctrl+C) or configured duration elapses.
     const int chunkMs = 100;
     RandomGenerator directorRng(static_cast<unsigned int>(std::time(nullptr)));
     int sigusr1CooldownMs = 1000; // attempt SIGUSR1 roughly every second if specialists exist
     int elapsedSinceUsr1 = 0;
+    bool durationStopIssued = false;
     while (!stopRequested.load()) {
         usleep(static_cast<useconds_t>(chunkMs * 1000));
+        int simTime = simNow();
+        if (!durationStopIssued && realNow() >= config.simulationDurationMinutes) {
+            durationStopIssued = true;
+            stopRequested.store(true);
+            logEvent(ids.logQueue, Role::Director, simTime,
+                     "Simulation duration reached (" + std::to_string(config.simulationDurationMinutes) + " min)");
+            break;
+        }
         elapsedSinceUsr1 += chunkMs;
         // Dynamically manage Registration2 based on waiting-room load.
         if (shared) {
@@ -383,9 +477,9 @@ int Director::run(const std::string& selfPath, const Config& config) {
             int waitingRoomLoad = shared->currentInWaitingRoom;
             stateSemGuard.post();
             if (sharedLen > qlen) qlen = sharedLen;
-            int openThreshold = std::max(config.K_registrationThreshold, config.N_waitingRoom / 2);
-            int closeThreshold = config.N_waitingRoom / 3;
-            if (!reg2Flag && waitingRoomLoad >= openThreshold) {
+            int openThreshold = config.K_registrationThreshold; // spec: if queue length >= K
+            int closeThreshold = config.N_waitingRoom / 3;     // spec: close if queue < N/3
+            if (!reg2Flag && qlen >= openThreshold) {
                 pid_t pid = fork();
                 if (pid == 0) {
                     std::vector<char*> args;
@@ -402,16 +496,17 @@ int Director::run(const std::string& selfPath, const Config& config) {
                     shared->reg2Active = 1;
                     shared->registration2Pid = pid;
                     stateSemGuard.post();
-                    logEvent(ids.logQueue, Role::Director, 0,
-                             "Registration2 spawned (waitingRoom=" + std::to_string(waitingRoomLoad) +
-                             "/" + std::to_string(config.N_waitingRoom) +
-                             " regQ=" + std::to_string(qlen) + ")");
+                    logEvent(ids.logQueue, Role::Director, simTime,
+                             "Registration2 spawned (regQ=" + std::to_string(qlen) +
+                             " waitingRoom=" + std::to_string(waitingRoomLoad) +
+                             "/" + std::to_string(config.N_waitingRoom) + ")");
                 }
-            } else if (reg2Flag && waitingRoomLoad < closeThreshold) {
+            } else if (reg2Flag && qlen < closeThreshold) {
                 if (reg2Pid > 0) {
                     kill(reg2Pid, SIGUSR2);
-                    logEvent(ids.logQueue, Role::Director, 0,
-                             "Registration2 closing (waitingRoom=" + std::to_string(waitingRoomLoad) +
+                    logEvent(ids.logQueue, Role::Director, simTime,
+                             "Registration2 closing (regQ=" + std::to_string(qlen) +
+                             " waitingRoom=" + std::to_string(waitingRoomLoad) +
                              "/" + std::to_string(config.N_waitingRoom) + ")");
                     waitWithTimeout(reg2Pid, "registration2");
                     reg2Pid = -1;
@@ -429,15 +524,22 @@ int Director::run(const std::string& selfPath, const Config& config) {
                 pid_t target = specialistPids[directorRng.uniformInt(0, static_cast<int>(specialistPids.size()) - 1)];
                 if (target > 0) {
                     kill(target, SIGUSR1);
-                    logEvent(ids.logQueue, Role::Director, 0, "Director sent SIGUSR1 to specialist pid=" + std::to_string(target));
+                    logEvent(ids.logQueue, Role::Director, simTime, "Director sent SIGUSR1 to specialist pid=" + std::to_string(target));
                 }
             }
         }
     }
 
-    logEvent(ids.logQueue, Role::Director, 0, "Director received stop request, broadcasting SIGUSR2");
+    int stopSimTime = simNow();
+    if (sigusr2Requested.load()) {
+        logEvent(ids.logQueue, Role::Director, stopSimTime, "Director received SIGUSR2, broadcasting shutdown");
+    } else if (sigintRequested.load()) {
+        logEvent(ids.logQueue, Role::Director, stopSimTime, "Director received SIGINT (Ctrl+C), broadcasting SIGUSR2");
+    } else {
+        logEvent(ids.logQueue, Role::Director, stopSimTime, "Director received stop request, broadcasting SIGUSR2");
+    }
     // Coordinated shutdown: send SIGUSR2 individually (process group removed for portability).
-    logEvent(ids.logQueue, Role::Director, 0, "Director initiating shutdown (SIGUSR2 to children)");
+    logEvent(ids.logQueue, Role::Director, stopSimTime, "Director initiating shutdown (SIGUSR2 to children)");
     if (reg1Pid > 0) kill(reg1Pid, SIGUSR2);
     if (reg2Pid > 0) kill(reg2Pid, SIGUSR2);
     if (triagePid > 0) kill(triagePid, SIGUSR2);
@@ -446,11 +548,6 @@ int Director::run(const std::string& selfPath, const Config& config) {
     }
     if (generatorPid > 0) kill(generatorPid, SIGUSR2);
 
-    // send termination marker for logger
-    if (ok) {
-        logEvent(ids.logQueue, Role::Director, 0, "END");
-    }
-
     waitWithTimeout(reg1Pid, "registration");
     waitWithTimeout(reg2Pid, "registration2");
     waitWithTimeout(triagePid, "triage");
@@ -458,6 +555,11 @@ int Director::run(const std::string& selfPath, const Config& config) {
         waitWithTimeout(pid, "specialist");
     }
     waitWithTimeout(generatorPid, "patient_generator");
+
+    // send termination marker for logger after children have had a chance to log shutdown
+    if (ok) {
+        logEvent(ids.logQueue, Role::Director, stopSimTime, "END");
+    }
     waitWithTimeout(loggerPid, "logger");
 
     int status = 0;

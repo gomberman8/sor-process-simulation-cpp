@@ -13,6 +13,7 @@
 #include <csignal>
 #include <cstring>
 #include <string>
+#include <ctime>
 #include <unistd.h>
 #include <sys/ipc.h>
 #include <sys/msg.h>
@@ -25,9 +26,30 @@ void handleSigusr2(int) {
     stopFlag.store(true);
     sigusr2Seen.store(true);
 }
+
+long long monotonicMs() {
+    struct timespec ts {};
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) return 0;
+    return static_cast<long long>(ts.tv_sec) * 1000LL + ts.tv_nsec / 1000000LL;
+}
+
+int currentSimMinutes(const SharedState* state) {
+    if (!state || state->timeScaleMsPerSimMinute <= 0) return 0;
+    long long now = monotonicMs();
+    long long delta = now - state->simStartMonotonicMs;
+    if (delta < 0) delta = 0;
+    return static_cast<int>(delta / state->timeScaleMsPerSimMinute);
+}
 } // namespace
 
 int Registration::run(const std::string& keyPath, bool isSecond) {
+    // Ignore SIGINT so only SIGUSR2 triggers shutdown.
+    struct sigaction saIgnore {};
+    saIgnore.sa_handler = SIG_IGN;
+    sigemptyset(&saIgnore.sa_mask);
+    saIgnore.sa_flags = 0;
+    sigaction(SIGINT, &saIgnore, nullptr);
+
     // Install SIGUSR2 handler for shutdown.
     struct sigaction sa {};
     sa.sa_handler = handleSigusr2;
@@ -68,7 +90,8 @@ int Registration::run(const std::string& keyPath, bool isSecond) {
 
     Role myRole = isSecond ? Role::Registration2 : Role::Registration1;
     // Log includes PID via logger; message text focuses on patient ids/flags.
-    logEvent(logQueue.id(), myRole, 0, isSecond ? "Registration2 started" : "Registration started");
+    int simTime = currentSimMinutes(statePtr);
+    logEvent(logQueue.id(), myRole, simTime, isSecond ? "Registration2 started" : "Registration started");
 
     while (!stopFlag.load()) {
         EventMessage ev{};
@@ -112,17 +135,19 @@ int Registration::run(const std::string& keyPath, bool isSecond) {
             break;
         }
         if (sent) {
-            logEvent(logQueue.id(), myRole, 0,
+            simTime = currentSimMinutes(statePtr);
+            logEvent(logQueue.id(), myRole, simTime,
                      "Forwarded patient id=" + std::to_string(ev.patientId) +
                      " vip=" + std::to_string(ev.isVip) +
                      " persons=" + std::to_string(ev.personsCount));
         }
     }
 
+    simTime = currentSimMinutes(statePtr);
     if (sigusr2Seen.load()) {
-        logEvent(logQueue.id(), myRole, 0, isSecond ? "Registration2 shutting down (SIGUSR2)" : "Registration shutting down (SIGUSR2)");
+        logEvent(logQueue.id(), myRole, simTime, isSecond ? "Registration2 shutting down (SIGUSR2)" : "Registration shutting down (SIGUSR2)");
     } else {
-        logEvent(logQueue.id(), myRole, 0, isSecond ? "Registration2 shutting down" : "Registration shutting down");
+        logEvent(logQueue.id(), myRole, simTime, isSecond ? "Registration2 shutting down" : "Registration shutting down");
     }
     shm.detach(statePtr);
     return 0;

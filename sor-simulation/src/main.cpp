@@ -2,6 +2,7 @@
 #include <string>
 #include <cstdlib>
 #include <iostream>
+#include <fstream>
 
 #include "director.hpp"
 #include "logging/logger.hpp"
@@ -13,40 +14,56 @@
 #include "roles/patient.hpp"
 
 namespace {
-bool parseConfig(int argc, char* argv[], Config& cfg, std::string& err) {
-    // Defaults if no args provided (small for quick runs; override via CLI for large loads).
+bool parseConfigFile(const std::string& path, Config& cfg, std::string& err) {
+    std::ifstream in(path);
+    if (!in) {
+        err = "Cannot open config file: " + path;
+        return false;
+    }
+    // Defaults in case some keys are absent.
     cfg.N_waitingRoom = 30;
-    cfg.K_registrationThreshold = 15;
-    cfg.timeScaleMsPerSimMinute = 20; // slower arrival by default
+    cfg.K_registrationThreshold = 0; // 0 means auto = N/2
+    cfg.timeScaleMsPerSimMinute = 20;
     cfg.simulationDurationMinutes = 5;
-    cfg.totalPatientsTarget = -1; // <=0 means infinite generation until SIGUSR2
+    cfg.totalPatientsTarget = -1;
     cfg.randomSeed = 12345;
 
-    // If arguments beyond program name exist and not in logger mode, expect all fields.
-    if (argc > 1 && std::string(argv[1]) != "logger") {
-        if (argc < 7) {
-            err = "Usage: ./sor_sim <N_waitingRoom> <K_threshold> <simMinutes> <totalPatients> <msPerSimMinute> <seed>";
-            return false;
-        }
+    auto trim = [](const std::string& s) {
+        size_t b = s.find_first_not_of(" \t\r\n");
+        if (b == std::string::npos) return std::string();
+        size_t e = s.find_last_not_of(" \t\r\n");
+        return s.substr(b, e - b + 1);
+    };
+
+    std::string line;
+    while (std::getline(in, line)) {
+        line = trim(line);
+        if (line.empty() || line[0] == '#') continue;
+        auto pos = line.find('=');
+        if (pos == std::string::npos) continue;
+        std::string key = trim(line.substr(0, pos));
+        std::string val = trim(line.substr(pos + 1));
         try {
-            cfg.N_waitingRoom = std::stoi(argv[1]);
-            cfg.K_registrationThreshold = std::stoi(argv[2]);
-            cfg.simulationDurationMinutes = std::stoi(argv[3]);
-            cfg.totalPatientsTarget = std::stoi(argv[4]);
-            cfg.timeScaleMsPerSimMinute = std::stoi(argv[5]);
-            cfg.randomSeed = static_cast<unsigned int>(std::stoul(argv[6]));
+            if (key == "N_waitingRoom") cfg.N_waitingRoom = std::stoi(val);
+            else if (key == "K_registrationThreshold") cfg.K_registrationThreshold = std::stoi(val);
+            else if (key == "simulationDurationMinutes") cfg.simulationDurationMinutes = std::stoi(val);
+            else if (key == "totalPatientsTarget") cfg.totalPatientsTarget = std::stoi(val);
+            else if (key == "timeScaleMsPerSimMinute") cfg.timeScaleMsPerSimMinute = std::stoi(val);
+            else if (key == "randomSeed") cfg.randomSeed = static_cast<unsigned int>(std::stoul(val));
         } catch (const std::exception&) {
-            err = "Invalid numeric argument";
+            err = "Invalid value for key: " + key;
             return false;
         }
     }
-
     if (cfg.N_waitingRoom <= 0) {
         err = "N_waitingRoom must be > 0";
         return false;
     }
+    if (cfg.K_registrationThreshold <= 0) {
+        cfg.K_registrationThreshold = cfg.N_waitingRoom / 2;
+    }
     if (cfg.K_registrationThreshold < cfg.N_waitingRoom / 2) {
-        err = "K_threshold must be >= N/2";
+        err = "K_registrationThreshold must be >= N/2";
         return false;
     }
     if (cfg.timeScaleMsPerSimMinute <= 0) {
@@ -57,7 +74,6 @@ bool parseConfig(int argc, char* argv[], Config& cfg, std::string& err) {
         err = "simulationDurationMinutes must be > 0";
         return false;
     }
-    // totalPatientsTarget <= 0 means infinite generation until SIGUSR2.
     return true;
 }
 } // namespace
@@ -146,7 +162,59 @@ int main(int argc, char* argv[]) {
 
     Config cfg{};
     std::string err;
-    if (!parseConfig(argc, argv, cfg, err)) {
+    bool configOk = false;
+
+    // Prefer config file; legacy positional numeric args still supported.
+    if (argc >= 2 && std::string(argv[1]) == "--config") {
+        if (argc < 3) {
+            std::cerr << "Usage: ./sor_sim --config <path>" << std::endl;
+            return EXIT_FAILURE;
+        }
+        configOk = parseConfigFile(argv[2], cfg, err);
+    } else if (argc >= 7) {
+        try {
+            cfg.N_waitingRoom = std::stoi(argv[1]);
+            cfg.K_registrationThreshold = std::stoi(argv[2]);
+            cfg.simulationDurationMinutes = std::stoi(argv[3]);
+            cfg.totalPatientsTarget = std::stoi(argv[4]);
+            cfg.timeScaleMsPerSimMinute = std::stoi(argv[5]);
+            cfg.randomSeed = static_cast<unsigned int>(std::stoul(argv[6]));
+            // basic validation
+            if (cfg.N_waitingRoom <= 0) {
+                err = "N_waitingRoom must be > 0";
+                configOk = false;
+            } else {
+                if (cfg.K_registrationThreshold <= 0) {
+                    cfg.K_registrationThreshold = cfg.N_waitingRoom / 2;
+                }
+                if (cfg.K_registrationThreshold < cfg.N_waitingRoom / 2 ||
+                    cfg.timeScaleMsPerSimMinute <= 0 || cfg.simulationDurationMinutes <= 0) {
+                    err = "Invalid numeric configuration values";
+                    configOk = false;
+                } else {
+                    configOk = true;
+                }
+            }
+        } catch (const std::exception&) {
+            err = "Invalid numeric argument";
+            configOk = false;
+        }
+    } else {
+        // default config file paths: current dir then parent
+        std::string errLocal;
+        configOk = parseConfigFile("config.cfg", cfg, errLocal);
+        if (!configOk) {
+            std::string errParent;
+            configOk = parseConfigFile("../config.cfg", cfg, errParent);
+            if (!configOk) {
+                err = "Cannot open config file: tried config.cfg and ../config.cfg";
+            }
+        } else {
+            err.clear();
+        }
+    }
+
+    if (!configOk) {
         std::cerr << "Config error: " << err << std::endl;
         return EXIT_FAILURE;
     }

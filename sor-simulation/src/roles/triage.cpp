@@ -14,6 +14,7 @@
 #include <csignal>
 #include <cstring>
 #include <string>
+#include <ctime>
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <unistd.h>
@@ -46,9 +47,30 @@ TriageColor pickColor(RandomGenerator& rng) {
     if (r < 45) return TriageColor::Yellow;
     return TriageColor::Green;
 }
+
+long long monotonicMs() {
+    struct timespec ts {};
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) return 0;
+    return static_cast<long long>(ts.tv_sec) * 1000LL + ts.tv_nsec / 1000000LL;
+}
+
+int currentSimMinutes(const SharedState* state) {
+    if (!state || state->timeScaleMsPerSimMinute <= 0) return 0;
+    long long now = monotonicMs();
+    long long delta = now - state->simStartMonotonicMs;
+    if (delta < 0) delta = 0;
+    return static_cast<int>(delta / state->timeScaleMsPerSimMinute);
+}
 } // namespace
 
 int Triage::run(const std::string& keyPath) {
+    // Ignore SIGINT so only SIGUSR2 controls shutdown.
+    struct sigaction saIgnore {};
+    saIgnore.sa_handler = SIG_IGN;
+    sigemptyset(&saIgnore.sa_mask);
+    saIgnore.sa_flags = 0;
+    sigaction(SIGINT, &saIgnore, nullptr);
+
     struct sigaction sa {};
     sa.sa_handler = handleSigusr2;
     sigemptyset(&sa.sa_mask);
@@ -87,7 +109,8 @@ int Triage::run(const std::string& keyPath) {
         return 1;
     }
 
-    logEvent(logQueue.id(), Role::Triage, 0, "Triage started");
+    int simTime = currentSimMinutes(statePtr);
+    logEvent(logQueue.id(), Role::Triage, simTime, "Triage started");
     RandomGenerator rng;
 
     while (!stopFlag.load()) {
@@ -119,7 +142,8 @@ int Triage::run(const std::string& keyPath) {
             for (int i = 0; i < ev.personsCount; ++i) {
                 waitSem.post();
             }
-            logEvent(logQueue.id(), Role::Triage, 0,
+            simTime = currentSimMinutes(statePtr);
+            logEvent(logQueue.id(), Role::Triage, simTime,
                      "Patient sent home from triage id=" + std::to_string(ev.patientId) +
                      " waitingRoom=" + std::to_string(inside) + "/" + std::to_string(capacity));
             continue;
@@ -156,17 +180,19 @@ int Triage::run(const std::string& keyPath) {
             break;
         }
         if (sent) {
-            logEvent(logQueue.id(), Role::Triage, 0,
+            simTime = currentSimMinutes(statePtr);
+            logEvent(logQueue.id(), Role::Triage, simTime,
                      "Forwarded patient id=" + std::to_string(ev.patientId) +
                      " to specialist=" + std::to_string(ev.specialistIdx) +
                      " color=" + std::to_string(ev.triageColor));
         }
     }
 
+    simTime = currentSimMinutes(statePtr);
     if (sigusr2Seen.load()) {
-        logEvent(logQueue.id(), Role::Triage, 0, "Triage shutting down (SIGUSR2)");
+        logEvent(logQueue.id(), Role::Triage, simTime, "Triage shutting down (SIGUSR2)");
     } else {
-        logEvent(logQueue.id(), Role::Triage, 0, "Triage shutting down");
+        logEvent(logQueue.id(), Role::Triage, simTime, "Triage shutting down");
     }
     shm.detach(statePtr);
     return 0;

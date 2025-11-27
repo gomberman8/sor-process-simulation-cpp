@@ -22,11 +22,16 @@ mkdir -p build
 cd build
 cmake ..
 cmake --build .
-# defaults tuned for quick runs: N=30 K=15 duration=5 totalPatients=50 (<=0 means infinite) msPerMinute=20 seed=12345
+# defaults now come from ../config.cfg (key=value). Override with --config <path> or legacy numeric args.
 ./sor_sim
 
 # or provide config explicitly
+./sor_sim --config ../config.cfg
+# legacy positional override still works:
 ./sor_sim <N_waitingRoom> <K_threshold> <simMinutes> <totalPatients> <msPerSimMinute> <seed>
+
+Notes:
+- `K_registrationThreshold=0` in the config means “auto” and sets K to N/2 to satisfy the assignment constraint (K >= N/2).
 ```
 Current binary prints a confirmation message; functional simulation arrives in subsequent commits.
 
