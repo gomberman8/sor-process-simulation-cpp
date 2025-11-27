@@ -4,6 +4,7 @@
 
 struct SharedState {
     int currentInWaitingRoom;   // persons inside (including children+guardians)
+    int waitingRoomCapacity;    // total capacity N
     int queueRegistrationLen;   // registration queue length
     int reg2Active;             // 0/1
 

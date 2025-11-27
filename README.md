@@ -22,7 +22,7 @@ mkdir -p build
 cd build
 cmake ..
 cmake --build .
-# defaults geared for larger runs: N=200 K=100 duration=720 totalPatients=2000 msPerMinute=10 seed=12345
+# defaults tuned for quick runs: N=30 K=15 duration=5 totalPatients=50 (<=0 means infinite) msPerMinute=20 seed=12345
 ./sor_sim
 
 # or provide config explicitly

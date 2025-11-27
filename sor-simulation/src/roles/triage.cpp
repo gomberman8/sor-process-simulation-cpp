@@ -20,9 +20,11 @@
 
 namespace {
 std::atomic<bool> stopFlag(false);
+std::atomic<bool> sigusr2Seen(false);
 
 void handleSigusr2(int) {
     stopFlag.store(true);
+    sigusr2Seen.store(true);
 }
 
 SpecialistType pickSpecialist(RandomGenerator& rng) {
@@ -111,12 +113,15 @@ int Triage::run(const std::string& keyPath) {
             } else {
                 statePtr->currentInWaitingRoom = 0;
             }
+            int inside = statePtr->currentInWaitingRoom;
+            int capacity = statePtr->waitingRoomCapacity;
             stateSem.post();
             for (int i = 0; i < ev.personsCount; ++i) {
                 waitSem.post();
             }
             logEvent(logQueue.id(), Role::Triage, 0,
-                     "Patient sent home from triage id=" + std::to_string(ev.patientId));
+                     "Patient sent home from triage id=" + std::to_string(ev.patientId) +
+                     " waitingRoom=" + std::to_string(inside) + "/" + std::to_string(capacity));
             continue;
         }
 
@@ -135,9 +140,22 @@ int Triage::run(const std::string& keyPath) {
         ev.triageColor = static_cast<int>(color);
 
         long routedType = ev.mtype + ev.specialistIdx; // per-specialist mtype
-        if (!specQueue.send(&ev, sizeof(ev), routedType)) {
+        // Non-blocking send with retry to avoid stalling if specialist queue is momentarily full.
+        size_t payloadSize = sizeof(EventMessage) - sizeof(long);
+        bool sent = false;
+        while (!sent) {
+            if (msgsnd(specQueue.id(), &ev, payloadSize, IPC_NOWAIT) == 0) {
+                sent = true;
+                break;
+            }
+            if (errno == EAGAIN) {
+                usleep(1000);
+                continue;
+            }
             logErrno("Triage send to specialist failed");
-        } else {
+            break;
+        }
+        if (sent) {
             logEvent(logQueue.id(), Role::Triage, 0,
                      "Forwarded patient id=" + std::to_string(ev.patientId) +
                      " to specialist=" + std::to_string(ev.specialistIdx) +
@@ -145,7 +163,11 @@ int Triage::run(const std::string& keyPath) {
         }
     }
 
-    logEvent(logQueue.id(), Role::Triage, 0, "Triage shutting down");
+    if (sigusr2Seen.load()) {
+        logEvent(logQueue.id(), Role::Triage, 0, "Triage shutting down (SIGUSR2)");
+    } else {
+        logEvent(logQueue.id(), Role::Triage, 0, "Triage shutting down");
+    }
     shm.detach(statePtr);
     return 0;
 }

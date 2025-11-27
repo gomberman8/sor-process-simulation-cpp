@@ -19,13 +19,15 @@
 
 namespace {
 std::atomic<bool> stopFlag(false);
+std::atomic<bool> sigusr2Seen(false);
 
 void handleSigusr2(int) {
     stopFlag.store(true);
+    sigusr2Seen.store(true);
 }
 } // namespace
 
-int Registration::run(const std::string& keyPath) {
+int Registration::run(const std::string& keyPath, bool isSecond) {
     // Install SIGUSR2 handler for shutdown.
     struct sigaction sa {};
     sa.sa_handler = handleSigusr2;
@@ -64,15 +66,16 @@ int Registration::run(const std::string& keyPath) {
         return 1;
     }
 
+    Role myRole = isSecond ? Role::Registration2 : Role::Registration1;
     // Log includes PID via logger; message text focuses on patient ids/flags.
-    logEvent(logQueue.id(), Role::Registration1, 0, "Registration started");
+    logEvent(logQueue.id(), myRole, 0, isSecond ? "Registration2 started" : "Registration started");
 
     while (!stopFlag.load()) {
         EventMessage ev{};
         long baseType = static_cast<long>(EventType::PatientArrived);
         // Use negative msgtyp to prioritize lower mtype (VIP first).
         ssize_t res = msgrcv(regQueue.id(), &ev, sizeof(EventMessage) - sizeof(long),
-                             -baseType, 0);
+                             -(baseType + 1), 0); // accept both VIP (1) and normal (2)
         if (res == -1) {
             if ((errno == EINTR && stopFlag.load()) || errno == EIDRM || errno == EINVAL) {
                 break;
@@ -88,19 +91,39 @@ int Registration::run(const std::string& keyPath) {
         }
         stateSem.post();
 
+        // Simulate service time to allow queue buildup (and potential reg2 activation).
+        usleep(100 * 1000); // 100ms per registration
+
         // Forward to triage queue.
         ev.mtype = static_cast<long>(EventType::PatientRegistered);
-        if (!triageQueue.send(&ev, sizeof(ev), ev.mtype)) {
+        // Non-blocking send with retry to avoid stalling when triage queue is full.
+        size_t payloadSize = sizeof(EventMessage) - sizeof(long);
+        bool sent = false;
+        while (!sent) {
+            if (msgsnd(triageQueue.id(), &ev, payloadSize, IPC_NOWAIT) == 0) {
+                sent = true;
+                break;
+            }
+            if (errno == EAGAIN) {
+                usleep(1000);
+                continue;
+            }
             logErrno("Registration send to triage failed");
-        } else {
-            logEvent(logQueue.id(), Role::Registration1, 0,
+            break;
+        }
+        if (sent) {
+            logEvent(logQueue.id(), myRole, 0,
                      "Forwarded patient id=" + std::to_string(ev.patientId) +
                      " vip=" + std::to_string(ev.isVip) +
                      " persons=" + std::to_string(ev.personsCount));
         }
     }
 
-    logEvent(logQueue.id(), Role::Registration1, 0, "Registration shutting down");
+    if (sigusr2Seen.load()) {
+        logEvent(logQueue.id(), myRole, 0, isSecond ? "Registration2 shutting down (SIGUSR2)" : "Registration shutting down (SIGUSR2)");
+    } else {
+        logEvent(logQueue.id(), myRole, 0, isSecond ? "Registration2 shutting down" : "Registration shutting down");
+    }
     shm.detach(statePtr);
     return 0;
 }

@@ -122,7 +122,12 @@ bool logEvent(int queueId, Role role, int simTime, const std::string& text) {
     msg.pid = getpid();
     std::strncpy(msg.text, text.c_str(), sizeof(msg.text) - 1);
     size_t payloadSize = sizeof(LogMessage) - sizeof(long);
-    if (msgsnd(queueId, &msg, payloadSize, 0) == -1) {
+    // Use IPC_NOWAIT to avoid blocking the simulation when the log queue is full.
+    // On EAGAIN we simply drop the log entry to keep processing moving.
+    if (msgsnd(queueId, &msg, payloadSize, IPC_NOWAIT) == -1) {
+        if (errno == EAGAIN) {
+            return false;
+        }
         if (errno != EIDRM && errno != EINVAL) {
             logErrno("logEvent msgsnd failed");
         }

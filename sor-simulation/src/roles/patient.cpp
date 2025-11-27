@@ -14,6 +14,7 @@
 #include <cstring>
 #include <string>
 #include <sys/ipc.h>
+#include <sys/msg.h>
 #include <unistd.h>
 
 namespace {
@@ -61,6 +62,11 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
         return 1;
     }
 
+    // Log that patient is queued outside waiting for a slot.
+    logEvent(logQueue.id(), Role::Patient, 0,
+             "Patient waiting to enter waiting room id=" + std::to_string(patientId) +
+             " persons=" + std::to_string(personsCount));
+
     // Acquire waiting room slots
     for (int i = 0; i < personsCount; ++i) {
         if (!waitSem.wait()) {
@@ -74,6 +80,8 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
     statePtr->currentInWaitingRoom += personsCount;
     statePtr->queueRegistrationLen += 1;
     statePtr->totalPatients += 1;
+    int inside = statePtr->currentInWaitingRoom;
+    int capacity = statePtr->waitingRoomCapacity;
     stateSem.post();
 
     logEvent(logQueue.id(), Role::Patient, 0,
@@ -81,7 +89,8 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
              " age=" + std::to_string(age) +
              " vip=" + std::string(isVip ? "1" : "0") +
              " persons=" + std::to_string(personsCount) +
-             " guardian=" + std::string(hasGuardian ? "1" : "0"));
+             " guardian=" + std::string(hasGuardian ? "1" : "0") +
+             " waitingRoom=" + std::to_string(inside) + "/" + std::to_string(capacity));
 
     EventMessage ev{};
     long baseType = static_cast<long>(EventType::PatientArrived);
@@ -93,7 +102,17 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
     ev.personsCount = personsCount;
     std::strncpy(ev.extra, hasGuardian ? "guardian" : "solo", sizeof(ev.extra) - 1);
 
-    regQueue.send(&ev, sizeof(ev), ev.mtype);
+    // Non-blocking send with retry to avoid deadlock if registration queue temporarily full.
+    size_t payloadSize = sizeof(EventMessage) - sizeof(long);
+    while (true) {
+        if (msgsnd(regQueue.id(), &ev, payloadSize, IPC_NOWAIT) == 0) break;
+        if (errno == EAGAIN) {
+            usleep(1000);
+            continue;
+        }
+        logErrno("Patient send to registration failed");
+        break;
+    }
 
     // Patient process ends; waiting room slots will be released by triage (if sent home) or specialist outcome.
     logEvent(logQueue.id(), Role::Patient, 0, "Patient registered id=" + std::to_string(patientId));

@@ -168,7 +168,7 @@ This document describes the intended behavior, inputs, outputs, and example usag
 ### `PatientGenerator` (`roles/patient_generator.hpp/.cpp`)
 - **Purpose:** Periodically spawns `Patient` processes with randomized attributes.
 - **Method:**
-  - `int run(const std::string& keyPath, const Config& cfg);` → 0 on normal stop. Forks/execs patient processes using config (totals/time scale/seed), passes attributes via argv; responds to SIGUSR2.
+  - `int run(const std::string& keyPath, const Config& cfg);` → 0 on normal stop. Forks/execs patient processes using config (time scale/seed); if `cfg.totalPatientsTarget <= 0` runs indefinitely until SIGUSR2, otherwise stops after the target count. Passes attributes via argv; responds to SIGUSR2 by signaling children and waiting.
 
 ### `Patient` (`roles/patient.hpp/.cpp`)
 - **Purpose:** Models a single (possibly child+guardian) patient moving through SOR pipeline.

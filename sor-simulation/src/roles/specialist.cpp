@@ -21,6 +21,7 @@
 namespace {
 std::atomic<bool> stopFlag(false);
 std::atomic<bool> pausedFlag(false);
+std::atomic<bool> sigusr2Seen(false);
 
 void handleSigusr2(int) { stopFlag.store(true); }
 void handleSigusr1(int) { pausedFlag.store(true); }
@@ -102,6 +103,7 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
             int pauseMs = rng.uniformInt(100, 500);
             usleep(static_cast<useconds_t>(pauseMs * 1000));
             pausedFlag.store(false);
+            logEvent(logQueue.id(), asRole, 0, "SIGUSR1: temporary leave finished");
         }
 
         EventMessage ev{};
@@ -116,7 +118,12 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
             continue;
         }
 
-        // Simulate exam
+        logEvent(logQueue.id(), asRole, 0,
+                 "Received patient id=" + std::to_string(ev.patientId) +
+                 " color=" + std::to_string(ev.triageColor) +
+                 " persons=" + std::to_string(ev.personsCount));
+
+        // Simulate exam; slower to allow queues to build (registration2 logic to kick in later).
         int examMs = rng.uniformInt(50, 200);
         usleep(static_cast<useconds_t>(examMs * 1000));
 
@@ -135,6 +142,8 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
         } else {
             statePtr->currentInWaitingRoom = 0;
         }
+        int inside = statePtr->currentInWaitingRoom;
+        int capacity = statePtr->waitingRoomCapacity;
         stateSem.post();
 
         for (int i = 0; i < ev.personsCount; ++i) {
@@ -151,10 +160,15 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
                  " outcome=" + outcomeText +
                  " persons=" + std::to_string(ev.personsCount) +
                  " color=" + std::to_string(ev.triageColor) +
-                 " specIdx=" + std::to_string(ev.specialistIdx));
+                 " specIdx=" + std::to_string(ev.specialistIdx) +
+                 " waitingRoom=" + std::to_string(inside) + "/" + std::to_string(capacity));
     }
 
-    logEvent(logQueue.id(), asRole, 0, "Specialist shutting down");
+    if (sigusr2Seen.load()) {
+        logEvent(logQueue.id(), asRole, 0, "Specialist shutting down (SIGUSR2)");
+    } else {
+        logEvent(logQueue.id(), asRole, 0, "Specialist shutting down");
+    }
     shm.detach(statePtr);
     return 0;
 }

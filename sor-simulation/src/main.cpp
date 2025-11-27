@@ -14,12 +14,12 @@
 
 namespace {
 bool parseConfig(int argc, char* argv[], Config& cfg, std::string& err) {
-    // Defaults if no args provided (geared for larger runs).
-    cfg.N_waitingRoom = 200;
-    cfg.K_registrationThreshold = 100;
-    cfg.timeScaleMsPerSimMinute = 10;
-    cfg.simulationDurationMinutes = 720; // 12h simulated
-    cfg.totalPatientsTarget = 2000;
+    // Defaults if no args provided (small for quick runs; override via CLI for large loads).
+    cfg.N_waitingRoom = 30;
+    cfg.K_registrationThreshold = 15;
+    cfg.timeScaleMsPerSimMinute = 20; // slower arrival by default
+    cfg.simulationDurationMinutes = 5;
+    cfg.totalPatientsTarget = -1; // <=0 means infinite generation until SIGUSR2
     cfg.randomSeed = 12345;
 
     // If arguments beyond program name exist and not in logger mode, expect all fields.
@@ -57,10 +57,7 @@ bool parseConfig(int argc, char* argv[], Config& cfg, std::string& err) {
         err = "simulationDurationMinutes must be > 0";
         return false;
     }
-    if (cfg.totalPatientsTarget <= 0) {
-        err = "totalPatientsTarget must be > 0";
-        return false;
-    }
+    // totalPatientsTarget <= 0 means infinite generation until SIGUSR2.
     return true;
 }
 } // namespace
@@ -82,7 +79,16 @@ int main(int argc, char* argv[]) {
             return EXIT_FAILURE;
         }
         Registration reg;
-        return reg.run(argv[2]);
+        return reg.run(argv[2], false);
+    }
+
+    if (argc >= 2 && std::string(argv[1]) == "registration2") {
+        if (argc < 3) {
+            std::cerr << "Registration2 mode usage: " << argv[0] << " registration2 <keyPath>" << std::endl;
+            return EXIT_FAILURE;
+        }
+        Registration reg;
+        return reg.run(argv[2], true);
     }
 
     if (argc >= 2 && std::string(argv[1]) == "triage") {
