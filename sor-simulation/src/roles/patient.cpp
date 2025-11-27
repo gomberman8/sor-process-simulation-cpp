@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <csignal>
+#include <pthread.h>
 #include <cstring>
 #include <string>
 #include <sys/ipc.h>
@@ -37,6 +38,26 @@ int currentSimMinutes(const SharedState* state) {
     long long delta = now - state->simStartMonotonicMs;
     if (delta < 0) delta = 0;
     return static_cast<int>(delta / state->timeScaleMsPerSimMinute);
+}
+
+struct ChildArgs {
+    int logQueueId;
+    int patientId;
+    std::atomic<bool>* stopFlagPtr;
+    const SharedState* shared;
+};
+
+void* childThreadMain(void* arg) {
+    ChildArgs* args = static_cast<ChildArgs*>(arg);
+    // Child shares waiting room with guardian; just log presence and wait for stop.
+    logEvent(args->logQueueId, Role::Patient, currentSimMinutes(args->shared),
+             "Child thread active for patient id=" + std::to_string(args->patientId));
+    while (!args->stopFlagPtr->load()) {
+        usleep(50 * 1000); // short sleep to avoid busy loop
+    }
+    logEvent(args->logQueueId, Role::Patient, currentSimMinutes(args->shared),
+             "Child thread exiting for patient id=" + std::to_string(args->patientId));
+    return nullptr;
 }
 } // namespace
 
@@ -82,6 +103,23 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
     auto* statePtr = static_cast<SharedState*>(shm.attach());
     if (!statePtr) {
         return 1;
+    }
+
+    // Spawn a lightweight thread to model the child presence (if any).
+    pthread_t childThread{};
+    ChildArgs* childArgs = nullptr;
+    std::atomic<bool> childStop(false);
+    bool childStarted = false;
+    if (hasGuardian && personsCount == 2) {
+        childArgs = new ChildArgs{logQueue.id(), patientId, &childStop, statePtr};
+        if (pthread_create(&childThread, nullptr, childThreadMain, childArgs) == 0) {
+            childStarted = true;
+        } else {
+            // If thread fails, continue as single process but log the failure.
+            logErrno("Failed to start child thread");
+            delete childArgs;
+            childArgs = nullptr;
+        }
     }
 
     // Log that patient is queued outside waiting for a slot.
@@ -141,6 +179,13 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
     // Patient process ends; waiting room slots will be released by triage (if sent home) or specialist outcome.
     simTime = currentSimMinutes(statePtr);
     logEvent(logQueue.id(), Role::Patient, simTime, "Patient registered id=" + std::to_string(patientId));
+
+    // Stop child thread if it was started.
+    if (childStarted) {
+        childStop.store(true);
+        pthread_join(childThread, nullptr);
+        delete childArgs;
+    }
     shm.detach(statePtr);
     return 0;
 }

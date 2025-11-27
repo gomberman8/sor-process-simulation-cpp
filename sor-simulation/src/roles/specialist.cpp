@@ -51,6 +51,11 @@ Role roleForType(SpecialistType t) {
     }
 }
 
+long maxMsgTypeForSpec(SpecialistType t) {
+    // base + specialist*10 + maxPriority(3)
+    return static_cast<long>(EventType::PatientToSpecialist) + static_cast<int>(t) * 10 + 3;
+}
+
 long long monotonicMs() {
     struct timespec ts {};
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) return 0;
@@ -131,10 +136,10 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
         }
 
         EventMessage ev{};
-        long baseType = static_cast<long>(EventType::PatientToSpecialist);
-        long myType = baseType + static_cast<int>(type);
+        long maxType = maxMsgTypeForSpec(type);
+        // Negative msgtyp picks the lowest mtype <= |msgtyp|, giving priority to red/yellow over green.
         ssize_t res = msgrcv(specQueue.id(), &ev, sizeof(EventMessage) - sizeof(long),
-                             myType, 0);
+                             -maxType, 0);
         if (res == -1) {
             if ((errno == EINTR && stopFlag.load()) || errno == EIDRM || errno == EINVAL) {
                 break;
@@ -149,7 +154,7 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
                  " persons=" + std::to_string(ev.personsCount));
 
         // Simulate exam; slower to allow queues to build (registration2 logic to kick in later).
-        int examMs = rng.uniformInt(50, 200);
+        int examMs = rng.uniformInt(10, 40);
         usleep(static_cast<useconds_t>(examMs * 1000));
 
         int outcomeRand = rng.uniformInt(0, 999);
@@ -161,19 +166,9 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
         } else {
             statePtr->outcomeOther += 1;
         }
-        // Patient leaves waiting room regardless of outcome.
-        if (statePtr->currentInWaitingRoom >= ev.personsCount) {
-            statePtr->currentInWaitingRoom -= ev.personsCount;
-        } else {
-            statePtr->currentInWaitingRoom = 0;
-        }
         int inside = statePtr->currentInWaitingRoom;
         int capacity = statePtr->waitingRoomCapacity;
         stateSem.post();
-
-        for (int i = 0; i < ev.personsCount; ++i) {
-            waitSem.post();
-        }
 
         std::string outcomeText;
         if (outcomeRand < 850) outcomeText = "home";

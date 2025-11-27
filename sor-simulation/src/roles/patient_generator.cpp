@@ -68,7 +68,6 @@ int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
 
     RandomGenerator rng(cfg.randomSeed);
     int spawned = 0;
-    const bool infiniteFlow = (cfg.totalPatientsTarget <= 0);
     // Log current mode for clarity during long runs.
     int logId = -1;
     key_t logKey = ftok(keyPath.c_str(), 'L');
@@ -89,12 +88,12 @@ int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
     int simTime = currentSimMinutes(statePtr);
     if (logId != -1) {
         logEvent(logId, Role::PatientGenerator, simTime,
-                 infiniteFlow ? "PatientGenerator running in infinite mode (until SIGUSR2)"
-                              : "PatientGenerator target=" + std::to_string(cfg.totalPatientsTarget));
+                 "PatientGenerator running (until SIGUSR2)");
     }
     std::vector<pid_t> children;
+    bool childLimitLogged = false;
 
-    while (!stopFlag.load() && (infiniteFlow || spawned < cfg.totalPatientsTarget)) {
+    while (!stopFlag.load()) {
         // Stop when real duration elapsed (if shared state present).
         if (statePtr && statePtr->simulationDurationMinutes > 0 &&
             currentRealMinutes(statePtr) >= statePtr->simulationDurationMinutes) {
@@ -103,7 +102,7 @@ int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
         }
 
         // Backpressure: avoid exceeding system process limits and waiting-room capacity.
-        const size_t maxChildren = 200; // cap concurrent patient processes to avoid fork errors
+        const size_t maxChildren = 2000; // cap concurrent patient processes to avoid fork errors
         while (!stopFlag.load() && children.size() >= maxChildren) {
             // Reap some children to free slots
             for (auto it = children.begin(); it != children.end();) {
@@ -115,26 +114,24 @@ int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
                         continue;
                     }
                 }
-                ++it;
-            }
+            ++it;
+        }
             if (children.size() >= maxChildren) {
                 usleep(50 * 1000); // brief pause before retrying
+                if (!childLimitLogged && logId != -1) {
+                    simTime = currentSimMinutes(statePtr);
+                    logEvent(logId, Role::PatientGenerator, simTime,
+                             "PatientGenerator waiting for children slots (count=" + std::to_string(children.size()) + ")");
+                }
+                childLimitLogged = true;
             }
         }
         if (stopFlag.load()) break;
-
-        // If waiting room is full, slow down generation.
-        if (statePtr) {
-            stateSem.wait();
-            int inside = statePtr->currentInWaitingRoom;
-            int capacity = statePtr->waitingRoomCapacity;
-            stateSem.post();
-            if (inside >= capacity) {
-                usleep(20 * 1000);
-                continue;
-            }
+        if (childLimitLogged && children.size() < maxChildren) {
+            childLimitLogged = false;
         }
 
+        // If waiting room is full, slow down generation.
         int age = rng.uniformInt(1, 90);
         bool hasGuardian = age < 18;
         int personsCount = hasGuardian ? 2 : 1;

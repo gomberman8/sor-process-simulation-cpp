@@ -315,7 +315,6 @@ int Director::run(const std::string& selfPath, const Config& config) {
                  "Simulation config N=" + std::to_string(config.N_waitingRoom) +
                  " K=" + std::to_string(config.K_registrationThreshold) +
                  " simMinutes=" + std::to_string(config.simulationDurationMinutes) +
-                 " totalPatients=" + std::to_string(config.totalPatientsTarget) +
                  " msPerMinute=" + std::to_string(config.timeScaleMsPerSimMinute));
     }
 
@@ -377,7 +376,6 @@ int Director::run(const std::string& selfPath, const Config& config) {
                 std::to_string(config.N_waitingRoom),
                 std::to_string(config.K_registrationThreshold),
                 std::to_string(config.simulationDurationMinutes),
-                std::to_string(config.totalPatientsTarget),
                 std::to_string(config.timeScaleMsPerSimMinute),
                 std::to_string(config.randomSeed)
             };
@@ -456,7 +454,8 @@ int Director::run(const std::string& selfPath, const Config& config) {
     while (!stopRequested.load()) {
         usleep(static_cast<useconds_t>(chunkMs * 1000));
         int simTime = simNow();
-        if (!durationStopIssued && realNow() >= config.simulationDurationMinutes) {
+        if (!durationStopIssued && config.simulationDurationMinutes > 0 &&
+            realNow() >= config.simulationDurationMinutes) {
             durationStopIssued = true;
             stopRequested.store(true);
             logEvent(ids.logQueue, Role::Director, simTime,

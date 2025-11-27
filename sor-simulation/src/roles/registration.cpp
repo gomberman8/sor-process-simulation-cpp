@@ -115,7 +115,7 @@ int Registration::run(const std::string& keyPath, bool isSecond) {
         stateSem.post();
 
         // Simulate service time to allow queue buildup (and potential reg2 activation).
-        usleep(100 * 1000); // 100ms per registration
+        usleep(25 * 1000); // 25ms per registration
 
         // Forward to triage queue.
         ev.mtype = static_cast<long>(EventType::PatientRegistered);

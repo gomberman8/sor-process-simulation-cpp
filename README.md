@@ -28,10 +28,11 @@ cmake --build .
 # or provide config explicitly
 ./sor_sim --config ../config.cfg
 # legacy positional override still works:
-./sor_sim <N_waitingRoom> <K_threshold> <simMinutes> <totalPatients> <msPerSimMinute> <seed>
+./sor_sim <N_waitingRoom> <K_threshold> <simMinutes> <msPerSimMinute> <seed>
 
-Notes:
 - `K_registrationThreshold=0` in the config means “auto” and sets K to N/2 to satisfy the assignment constraint (K >= N/2).
+- `N_waitingRoom=50` gives more slots so blocked patient processes wake up faster in busy runs.
+- `simulationDurationMinutes=0` in the config means the director lets the generator run until you stop it (SIGUSR2 / Ctrl+C).
 ```
 Current binary prints a confirmation message; functional simulation arrives in subsequent commits.
 
@@ -53,7 +54,7 @@ Specialist role can be invoked directly (type as int from SpecialistType enum or
 ```
 Patient generator/patient can be invoked directly:
 ```bash
-./sor_sim patient_generator <keyPath> <N> <K> <simMinutes> <totalPatients> <msPerMinute> <seed>
+./sor_sim patient_generator <keyPath> <N> <K> <simMinutes> <msPerMinute> <seed>
 ./sor_sim patient <keyPath> <id> <age> <isVip> <hasGuardian> <personsCount>
 ```
 Director currently spawns patient generator and all specialists via exec for the demo lifecycle.

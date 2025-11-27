@@ -48,6 +48,15 @@ TriageColor pickColor(RandomGenerator& rng) {
     return TriageColor::Green;
 }
 
+int colorPriority(TriageColor c) {
+    switch (c) {
+        case TriageColor::Red: return 1;    // highest priority
+        case TriageColor::Yellow: return 2; // medium
+        case TriageColor::Green: return 3;  // lowest
+        default: return 3;
+    }
+}
+
 long long monotonicMs() {
     struct timespec ts {};
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) return 0;
@@ -157,13 +166,21 @@ int Triage::run(const std::string& keyPath) {
             default: break;
         }
         SpecialistType spec = pickSpecialist(rng);
+        if (statePtr->currentInWaitingRoom >= ev.personsCount) {
+            statePtr->currentInWaitingRoom -= ev.personsCount;
+        } else {
+            statePtr->currentInWaitingRoom = 0;
+        }
         stateSem.post();
+        for (int i = 0; i < ev.personsCount; ++i) {
+            waitSem.post();
+        }
 
         ev.mtype = static_cast<long>(EventType::PatientToSpecialist);
         ev.specialistIdx = static_cast<int>(spec);
         ev.triageColor = static_cast<int>(color);
 
-        long routedType = ev.mtype + ev.specialistIdx; // per-specialist mtype
+        long routedType = ev.mtype + ev.specialistIdx * 10 + colorPriority(color); // per-specialist priority mtype
         // Non-blocking send with retry to avoid stalling if specialist queue is momentarily full.
         size_t payloadSize = sizeof(EventMessage) - sizeof(long);
         bool sent = false;

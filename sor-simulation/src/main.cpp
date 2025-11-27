@@ -24,8 +24,7 @@ bool parseConfigFile(const std::string& path, Config& cfg, std::string& err) {
     cfg.N_waitingRoom = 30;
     cfg.K_registrationThreshold = 0; // 0 means auto = N/2
     cfg.timeScaleMsPerSimMinute = 20;
-    cfg.simulationDurationMinutes = 5;
-    cfg.totalPatientsTarget = -1;
+    cfg.simulationDurationMinutes = 0;
     cfg.randomSeed = 12345;
 
     auto trim = [](const std::string& s) {
@@ -47,7 +46,6 @@ bool parseConfigFile(const std::string& path, Config& cfg, std::string& err) {
             if (key == "N_waitingRoom") cfg.N_waitingRoom = std::stoi(val);
             else if (key == "K_registrationThreshold") cfg.K_registrationThreshold = std::stoi(val);
             else if (key == "simulationDurationMinutes") cfg.simulationDurationMinutes = std::stoi(val);
-            else if (key == "totalPatientsTarget") cfg.totalPatientsTarget = std::stoi(val);
             else if (key == "timeScaleMsPerSimMinute") cfg.timeScaleMsPerSimMinute = std::stoi(val);
             else if (key == "randomSeed") cfg.randomSeed = static_cast<unsigned int>(std::stoul(val));
         } catch (const std::exception&) {
@@ -68,10 +66,6 @@ bool parseConfigFile(const std::string& path, Config& cfg, std::string& err) {
     }
     if (cfg.timeScaleMsPerSimMinute <= 0) {
         err = "timeScaleMsPerSimMinute must be > 0";
-        return false;
-    }
-    if (cfg.simulationDurationMinutes <= 0) {
-        err = "simulationDurationMinutes must be > 0";
         return false;
     }
     return true;
@@ -127,9 +121,9 @@ int main(int argc, char* argv[]) {
     }
 
     if (argc >= 2 && std::string(argv[1]) == "patient_generator") {
-        if (argc < 9) {
+        if (argc < 8) {
             std::cerr << "Patient generator usage: " << argv[0]
-                      << " patient_generator <keyPath> <N> <K> <simMinutes> <totalPatients> <msPerMinute> <seed>"
+                      << " patient_generator <keyPath> <N> <K> <simMinutes> <msPerMinute> <seed>"
                       << std::endl;
             return EXIT_FAILURE;
         }
@@ -137,9 +131,8 @@ int main(int argc, char* argv[]) {
         cfg.N_waitingRoom = std::stoi(argv[3]);
         cfg.K_registrationThreshold = std::stoi(argv[4]);
         cfg.simulationDurationMinutes = std::stoi(argv[5]);
-        cfg.totalPatientsTarget = std::stoi(argv[6]);
-        cfg.timeScaleMsPerSimMinute = std::stoi(argv[7]);
-        cfg.randomSeed = static_cast<unsigned int>(std::stoul(argv[8]));
+        cfg.timeScaleMsPerSimMinute = std::stoi(argv[6]);
+        cfg.randomSeed = static_cast<unsigned int>(std::stoul(argv[7]));
         PatientGenerator gen;
         return gen.run(argv[2], cfg);
     }
@@ -171,14 +164,13 @@ int main(int argc, char* argv[]) {
             return EXIT_FAILURE;
         }
         configOk = parseConfigFile(argv[2], cfg, err);
-    } else if (argc >= 7) {
+    } else if (argc >= 6) {
         try {
             cfg.N_waitingRoom = std::stoi(argv[1]);
             cfg.K_registrationThreshold = std::stoi(argv[2]);
             cfg.simulationDurationMinutes = std::stoi(argv[3]);
-            cfg.totalPatientsTarget = std::stoi(argv[4]);
-            cfg.timeScaleMsPerSimMinute = std::stoi(argv[5]);
-            cfg.randomSeed = static_cast<unsigned int>(std::stoul(argv[6]));
+            cfg.timeScaleMsPerSimMinute = std::stoi(argv[4]);
+            cfg.randomSeed = static_cast<unsigned int>(std::stoul(argv[5]));
             // basic validation
             if (cfg.N_waitingRoom <= 0) {
                 err = "N_waitingRoom must be > 0";
@@ -188,7 +180,7 @@ int main(int argc, char* argv[]) {
                     cfg.K_registrationThreshold = cfg.N_waitingRoom / 2;
                 }
                 if (cfg.K_registrationThreshold < cfg.N_waitingRoom / 2 ||
-                    cfg.timeScaleMsPerSimMinute <= 0 || cfg.simulationDurationMinutes <= 0) {
+                    cfg.timeScaleMsPerSimMinute <= 0) {
                     err = "Invalid numeric configuration values";
                     configOk = false;
                 } else {

@@ -7,6 +7,5 @@ struct Config {
     int K_registrationThreshold;
     int timeScaleMsPerSimMinute;
     int simulationDurationMinutes;
-    int totalPatientsTarget;
     unsigned int randomSeed;
 };
