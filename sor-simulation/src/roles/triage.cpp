@@ -19,6 +19,8 @@
 #include <sys/msg.h>
 #include <unistd.h>
 
+//TODO add waitSem.post() as soon as a patient leaves the waiting room and goes into triage - not after the decision, because they cannot get back to the waiting room from Triage, so we should allow people to get into the waiting room from the outside
+
 namespace {
 std::atomic<bool> stopFlag(false);
 std::atomic<bool> sigusr2Seen(false);

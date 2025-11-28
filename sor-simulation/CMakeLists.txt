@@ -24,4 +24,6 @@ set(SRC_FILES
 
 add_executable(sor_sim ${SRC_FILES})
 
+target_link_libraries(sor_sim PRIVATE pthread)
 target_include_directories(sor_sim PRIVATE include)
+
