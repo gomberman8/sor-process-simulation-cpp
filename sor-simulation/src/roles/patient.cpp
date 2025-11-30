@@ -82,12 +82,15 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
     SharedMemory shm;
 
     key_t regKey = ftok(keyPath.c_str(), 'R');
+    key_t triKey = ftok(keyPath.c_str(), 'T');
+    key_t specKey = ftok(keyPath.c_str(), 'S');
     key_t logKey = ftok(keyPath.c_str(), 'L');
     key_t waitKey = ftok(keyPath.c_str(), 'W');
     key_t stateKey = ftok(keyPath.c_str(), 'M');
     key_t shmKey = ftok(keyPath.c_str(), 'H');
 
-    if (regKey == -1 || logKey == -1 || waitKey == -1 || stateKey == -1 || shmKey == -1) {
+    if (regKey == -1 || triKey == -1 || specKey == -1 || logKey == -1 ||
+        waitKey == -1 || stateKey == -1 || shmKey == -1) {
         logErrno("Patient ftok failed");
         return 1;
     }
@@ -104,6 +107,17 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
     if (!statePtr) {
         return 1;
     }
+
+    int triageQueueId = -1;
+    int specialistsQueueId = -1;
+    if (triKey != -1) {
+        triageQueueId = msgget(triKey, 0);
+    }
+    if (specKey != -1) {
+        specialistsQueueId = msgget(specKey, 0);
+    }
+    setLogMetricsContext({statePtr, regQueue.id(), triageQueueId, specialistsQueueId,
+                          waitSem.id(), stateSem.id()});
 
     // Spawn a lightweight thread to model the child presence (if any).
     pthread_t childThread{};
@@ -141,8 +155,6 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
     statePtr->currentInWaitingRoom += personsCount;
     statePtr->queueRegistrationLen += 1;
     statePtr->totalPatients += 1;
-    int inside = statePtr->currentInWaitingRoom;
-    int capacity = statePtr->waitingRoomCapacity;
     stateSem.post();
 
     simTime = currentSimMinutes(statePtr);
@@ -151,8 +163,7 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
              " age=" + std::to_string(age) +
              " vip=" + std::string(isVip ? "1" : "0") +
              " persons=" + std::to_string(personsCount) +
-             " guardian=" + std::string(hasGuardian ? "1" : "0") +
-             " waitingRoom=" + std::to_string(inside) + "/" + std::to_string(capacity));
+             " guardian=" + std::string(hasGuardian ? "1" : "0"));
 
     EventMessage ev{};
     long baseType = static_cast<long>(EventType::PatientArrived);
@@ -167,7 +178,9 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
     // Non-blocking send with retry to avoid deadlock if registration queue temporarily full.
     size_t payloadSize = sizeof(EventMessage) - sizeof(long);
     while (true) {
-        if (msgsnd(regQueue.id(), &ev, payloadSize, IPC_NOWAIT) == 0) break;
+        if (msgsnd(regQueue.id(), &ev, payloadSize, IPC_NOWAIT) == 0) {
+            break;
+        }
         if (errno == EAGAIN) {
             usleep(1000);
             continue;
@@ -176,7 +189,7 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
         break;
     }
 
-    // Patient process ends; waiting room slots will be released by triage (if sent home) or specialist outcome.
+    // Patient process ends; waiting room slots will be released once registration forwards the patient.
     simTime = currentSimMinutes(statePtr);
     logEvent(logQueue.id(), Role::Patient, simTime, "Patient registered id=" + std::to_string(patientId));
 

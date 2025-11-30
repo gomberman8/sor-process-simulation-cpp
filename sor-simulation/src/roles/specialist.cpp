@@ -97,13 +97,16 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
     Semaphore waitSem;
     SharedMemory shm;
 
+    key_t regKey = ftok(keyPath.c_str(), 'R');
+    key_t triKey = ftok(keyPath.c_str(), 'T');
     key_t specKey = ftok(keyPath.c_str(), 'S');
     key_t logKey = ftok(keyPath.c_str(), 'L');
     key_t semStateKey = ftok(keyPath.c_str(), 'M');
     key_t waitKey = ftok(keyPath.c_str(), 'W');
     key_t shmKey = ftok(keyPath.c_str(), 'H');
 
-    if (specKey == -1 || logKey == -1 || semStateKey == -1 || waitKey == -1 || shmKey == -1) {
+    if (regKey == -1 || triKey == -1 || specKey == -1 || logKey == -1 ||
+        semStateKey == -1 || waitKey == -1 || shmKey == -1) {
         logErrno("Specialist ftok failed");
         return 1;
     }
@@ -120,6 +123,17 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
     if (!statePtr) {
         return 1;
     }
+
+    int registrationQueueId = -1;
+    int triageQueueId = -1;
+    if (regKey != -1) {
+        registrationQueueId = msgget(regKey, 0);
+    }
+    if (triKey != -1) {
+        triageQueueId = msgget(triKey, 0);
+    }
+    setLogMetricsContext({statePtr, registrationQueueId, triageQueueId, specQueue.id(),
+                          waitSem.id(), stateSem.id()});
 
     Role asRole = roleForType(type);
     int simTime = currentSimMinutes(statePtr);
@@ -166,8 +180,6 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
         } else {
             statePtr->outcomeOther += 1;
         }
-        int inside = statePtr->currentInWaitingRoom;
-        int capacity = statePtr->waitingRoomCapacity;
         stateSem.post();
 
         std::string outcomeText;
@@ -181,8 +193,7 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
                  " outcome=" + outcomeText +
                  " persons=" + std::to_string(ev.personsCount) +
                  " color=" + std::to_string(ev.triageColor) +
-                 " specIdx=" + std::to_string(ev.specialistIdx) +
-                 " waitingRoom=" + std::to_string(inside) + "/" + std::to_string(capacity));
+                 " specIdx=" + std::to_string(ev.specialistIdx));
     }
 
     simTime = currentSimMinutes(statePtr);

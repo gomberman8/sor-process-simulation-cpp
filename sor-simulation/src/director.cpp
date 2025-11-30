@@ -28,6 +28,7 @@
 #include <chrono>
 #include <thread>
 #include <atomic>
+#include <iostream>
 
 namespace {
 struct IpcIds {
@@ -308,6 +309,11 @@ int Director::run(const std::string& selfPath, const Config& config) {
         }
     }
 
+    if (ok && shared) {
+        setLogMetricsContext({shared, ids.regQueue, ids.triageQueue, ids.specialistsQueue,
+                              ids.semWaitingRoom, ids.semSharedState});
+    }
+
     if (ok) {
         int simTime = simNow();
         logEvent(ids.logQueue, Role::Director, simTime, "Director: IPC initialized, logger spawned: " + logPath);
@@ -534,6 +540,7 @@ int Director::run(const std::string& selfPath, const Config& config) {
         logEvent(ids.logQueue, Role::Director, stopSimTime, "Director received SIGUSR2, broadcasting shutdown");
     } else if (sigintRequested.load()) {
         logEvent(ids.logQueue, Role::Director, stopSimTime, "Director received SIGINT (Ctrl+C), broadcasting SIGUSR2");
+        std::cout << "Director received SIGINT (Ctrl+C), broadcasting SIGUSR2" << std::endl;
     } else {
         logEvent(ids.logQueue, Role::Director, stopSimTime, "Director received stop request, broadcasting SIGUSR2");
     }

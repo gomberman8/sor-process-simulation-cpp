@@ -19,7 +19,6 @@
 #include <sys/msg.h>
 #include <unistd.h>
 
-//TODO add waitSem.post() as soon as a patient leaves the waiting room and goes into triage - not after the decision, because they cannot get back to the waiting room from Triage, so we should allow people to get into the waiting room from the outside
 
 namespace {
 std::atomic<bool> stopFlag(false);
@@ -95,6 +94,7 @@ int Triage::run(const std::string& keyPath) {
     Semaphore waitSem;
     SharedMemory shm;
 
+    key_t regKey = ftok(keyPath.c_str(), 'R');
     key_t triKey = ftok(keyPath.c_str(), 'T');
     key_t specKey = ftok(keyPath.c_str(), 'S');
     key_t logKey = ftok(keyPath.c_str(), 'L');
@@ -102,7 +102,8 @@ int Triage::run(const std::string& keyPath) {
     key_t waitKey = ftok(keyPath.c_str(), 'W');
     key_t shmKey = ftok(keyPath.c_str(), 'H');
 
-    if (triKey == -1 || specKey == -1 || logKey == -1 || semStateKey == -1 || waitKey == -1 || shmKey == -1) {
+    if (regKey == -1 || triKey == -1 || specKey == -1 || logKey == -1 ||
+        semStateKey == -1 || waitKey == -1 || shmKey == -1) {
         logErrno("Triage ftok failed");
         return 1;
     }
@@ -119,6 +120,13 @@ int Triage::run(const std::string& keyPath) {
     if (!statePtr) {
         return 1;
     }
+
+    int registrationQueueId = -1;
+    if (regKey != -1) {
+        registrationQueueId = msgget(regKey, 0);
+    }
+    setLogMetricsContext({statePtr, registrationQueueId, triageQueue.id(), specQueue.id(),
+                          waitSem.id(), stateSem.id()});
 
     int simTime = currentSimMinutes(statePtr);
     logEvent(logQueue.id(), Role::Triage, simTime, "Triage started");
@@ -141,22 +149,18 @@ int Triage::run(const std::string& keyPath) {
         stateSem.wait();
         if (rHome < 5) {
             statePtr->triageSentHome += 1;
-            // free waiting room slots for this patient
             if (statePtr->currentInWaitingRoom >= ev.personsCount) {
                 statePtr->currentInWaitingRoom -= ev.personsCount;
             } else {
                 statePtr->currentInWaitingRoom = 0;
             }
-            int inside = statePtr->currentInWaitingRoom;
-            int capacity = statePtr->waitingRoomCapacity;
             stateSem.post();
             for (int i = 0; i < ev.personsCount; ++i) {
                 waitSem.post();
             }
             simTime = currentSimMinutes(statePtr);
             logEvent(logQueue.id(), Role::Triage, simTime,
-                     "Patient sent home from triage id=" + std::to_string(ev.patientId) +
-                     " waitingRoom=" + std::to_string(inside) + "/" + std::to_string(capacity));
+                     "Patient sent home from triage id=" + std::to_string(ev.patientId));
             continue;
         }
 

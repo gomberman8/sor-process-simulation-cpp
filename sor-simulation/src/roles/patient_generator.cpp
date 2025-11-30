@@ -17,8 +17,9 @@
 #include <vector>
 #include <ctime>
 #include <sys/wait.h>
-#include <unistd.h>
 #include <sys/ipc.h>
+#include <sys/msg.h>
+#include <unistd.h>
 
 namespace {
 std::atomic<bool> stopFlag(false);
@@ -72,6 +73,9 @@ int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
     int logId = -1;
     key_t logKey = ftok(keyPath.c_str(), 'L');
     MessageQueue logQueue;
+    key_t regKey = ftok(keyPath.c_str(), 'R');
+    key_t triKey = ftok(keyPath.c_str(), 'T');
+    key_t specKey = ftok(keyPath.c_str(), 'S');
     if (logKey != -1 && logQueue.open(logKey)) {
         logId = logQueue.id();
     }
@@ -85,6 +89,21 @@ int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
     if (shmKey != -1 && semKey != -1 && shm.open(shmKey) && stateSem.open(semKey)) {
         statePtr = static_cast<SharedState*>(shm.attach());
     }
+
+    int regQueueId = -1;
+    int triQueueId = -1;
+    int specialistsQueueId = -1;
+    if (regKey != -1) {
+        regQueueId = msgget(regKey, 0);
+    }
+    if (triKey != -1) {
+        triQueueId = msgget(triKey, 0);
+    }
+    if (specKey != -1) {
+        specialistsQueueId = msgget(specKey, 0);
+    }
+    setLogMetricsContext({statePtr, regQueueId, triQueueId, specialistsQueueId,
+                          -1, stateSem.id()});
     int simTime = currentSimMinutes(statePtr);
     if (logId != -1) {
         logEvent(logId, Role::PatientGenerator, simTime,

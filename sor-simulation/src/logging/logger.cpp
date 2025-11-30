@@ -3,14 +3,16 @@
 #include "util/error.hpp"
 
 #include <fcntl.h>
-#include <unistd.h>
+#include <signal.h>
 #include <string>
 #include <sys/msg.h>
+#include <sys/sem.h>
+#include <unistd.h>
 #include <cstring>
 #include <iostream>
-#include <signal.h>
 
 #include "model/events.hpp"
+#include "model/shared_state.hpp"
 #include "model/types.hpp"
 
 Logger::Logger() : fd(-1) {}
@@ -52,23 +54,72 @@ void Logger::closeFile() {
 }
 
 namespace {
-std::string roleToString(int roleInt) {
+struct MetricsSnapshot {
+    int waitingInside{0};
+    int waitingCapacity{0};
+    int registrationQueueLen{0};
+    int triageQueueLen{0};
+    int specialistsQueueLen{0};
+    int waitSemaphoreValue{0};
+    int stateSemaphoreValue{0};
+};
+
+LogMetricsContext g_logMetricsContext{};
+bool g_metricsContextSet = false;
+
+int queueLength(int qid) {
+    if (qid < 0) return 0;
+    struct msqid_ds stats{};
+    if (msgctl(qid, IPC_STAT, &stats) == -1) {
+        return 0;
+    }
+    return static_cast<int>(stats.msg_qnum);
+}
+
+int semaphoreValue(int semId) {
+    if (semId < 0) return 0;
+    int val = semctl(semId, 0, GETVAL);
+    if (val == -1) {
+        return 0;
+    }
+    return val;
+}
+
+MetricsSnapshot collectMetrics() {
+    MetricsSnapshot metrics{};
+    if (!g_metricsContextSet) {
+        return metrics;
+    }
+    if (g_logMetricsContext.sharedState) {
+        metrics.waitingInside = g_logMetricsContext.sharedState->currentInWaitingRoom;
+        metrics.waitingCapacity = g_logMetricsContext.sharedState->waitingRoomCapacity;
+    }
+    metrics.registrationQueueLen = queueLength(g_logMetricsContext.registrationQueueId);
+    metrics.triageQueueLen = queueLength(g_logMetricsContext.triageQueueId);
+    metrics.specialistsQueueLen = queueLength(g_logMetricsContext.specialistsQueueId);
+    metrics.waitSemaphoreValue = semaphoreValue(g_logMetricsContext.waitSemaphoreId);
+    metrics.stateSemaphoreValue = semaphoreValue(g_logMetricsContext.stateSemaphoreId);
+    return metrics;
+}
+
+std::string roleLabel(int roleInt) {
     auto role = static_cast<Role>(roleInt);
     switch (role) {
-        case Role::Director: return "DIRECTOR";
-        case Role::PatientGenerator: return "PATIENT_GEN";
-        case Role::Patient: return "PATIENT";
-        case Role::Registration1: return "REG1";
-        case Role::Registration2: return "REG2";
-        case Role::Triage: return "TRIAGE";
-        case Role::SpecialistCardio: return "SPEC_CARDIO";
-        case Role::SpecialistNeuro: return "SPEC_NEURO";
-        case Role::SpecialistOphthalmo: return "SPEC_OPHTH";
-        case Role::SpecialistLaryng: return "SPEC_LARYNG";
-        case Role::SpecialistSurgeon: return "SPEC_SURGEON";
-        case Role::SpecialistPaediatric: return "SPEC_PAED";
-        case Role::Logger: return "LOGGER";
-        default: return "UNKNOWN";
+        case Role::Director: return "director";
+        case Role::PatientGenerator: return "patient_gen";
+        case Role::Patient: return "patient";
+        case Role::Registration1: return "reg1";
+        case Role::Registration2: return "reg2";
+        case Role::Triage: return "triage";
+        case Role::SpecialistCardio:
+        case Role::SpecialistNeuro:
+        case Role::SpecialistOphthalmo:
+        case Role::SpecialistLaryng:
+        case Role::SpecialistSurgeon:
+        case Role::SpecialistPaediatric:
+            return "specialist";
+        case Role::Logger: return "logger";
+        default: return "unknown";
     }
 }
 } // namespace
@@ -106,16 +157,20 @@ int runLogger(int queueId, const std::string& path) {
         }
 
         // Semicolon-separated line for easy parsing/CSV import:
-        // simTime;pid;role;text
+        // simTime;pid;wR;rQ;tQ;sQ;wSem;sSem;who;text
         std::string line = std::to_string(msg.simTime) + ";"
                          + std::to_string(msg.pid) + ";"
-                         + roleToString(msg.role) + ";"
                          + msg.text;
         logger.logLine(line);
     }
 
     logger.closeFile();
     return ok ? 0 : 1;
+}
+
+void setLogMetricsContext(const LogMetricsContext& context) {
+    g_logMetricsContext = context;
+    g_metricsContextSet = true;
 }
 
 bool logEvent(int queueId, Role role, int simTime, const std::string& text) {
@@ -128,7 +183,19 @@ bool logEvent(int queueId, Role role, int simTime, const std::string& text) {
     msg.role = static_cast<int>(role);
     msg.simTime = simTime;
     msg.pid = getpid();
-    std::strncpy(msg.text, text.c_str(), sizeof(msg.text) - 1);
+    std::string finalText = text;
+    if (g_metricsContextSet) {
+        MetricsSnapshot metrics = collectMetrics();
+        finalText = "wR=" + std::to_string(metrics.waitingInside) + "/" + std::to_string(metrics.waitingCapacity) + ";"
+                  + "rQ=" + std::to_string(metrics.registrationQueueLen) + ";"
+                  + "tQ=" + std::to_string(metrics.triageQueueLen) + ";"
+                  + "sQ=" + std::to_string(metrics.specialistsQueueLen) + ";"
+                  + "wSem=" + std::to_string(metrics.waitSemaphoreValue) + ";"
+                  + "sSem=" + std::to_string(metrics.stateSemaphoreValue) + ";"
+                  + roleLabel(static_cast<int>(role)) + ";"
+                  + text;
+    }
+    std::strncpy(msg.text, finalText.c_str(), sizeof(msg.text) - 1);
     size_t payloadSize = sizeof(LogMessage) - sizeof(long);
     // Use IPC_NOWAIT to avoid blocking the simulation when the log queue is full.
     // On EAGAIN we simply drop the log entry to keep processing moving.
