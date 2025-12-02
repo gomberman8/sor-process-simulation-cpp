@@ -43,3 +43,5 @@ enum class Role {
     SpecialistPaediatric,
     Logger
 };
+
+constexpr int kSpecialistCount = 6;

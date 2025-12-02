@@ -28,14 +28,17 @@
 #include <chrono>
 #include <thread>
 #include <atomic>
+#include <fstream>
 #include <iostream>
+#include <sstream>
+#include <array>
 
 namespace {
 struct IpcIds {
     int logQueue{-1};
     int regQueue{-1};
     int triageQueue{-1};
-    int specialistsQueue{-1};
+    std::array<int, kSpecialistCount> specialistsQueue{};
     int shmId{-1};
     int semWaitingRoom{-1};
     int semSharedState{-1};
@@ -83,15 +86,24 @@ bool createQueues(const std::string& keyPath, IpcIds& ids) {
     MessageQueue logQ;
     MessageQueue regQ;
     MessageQueue triQ;
-    MessageQueue specQ;
+    std::array<MessageQueue, kSpecialistCount> specQs;
 
     key_t logKey = ftok(keyPath.c_str(), 'L');
     key_t regKey = ftok(keyPath.c_str(), 'R');
     key_t triKey = ftok(keyPath.c_str(), 'T');
-    key_t specKey = ftok(keyPath.c_str(), 'S');
-    if (logKey == -1 || regKey == -1 || triKey == -1 || specKey == -1) {
+    std::array<key_t, kSpecialistCount> specKeys;
+    for (int i = 0; i < kSpecialistCount; ++i) {
+        specKeys[i] = ftok(keyPath.c_str(), 'A' + i);
+    }
+    if (logKey == -1 || regKey == -1 || triKey == -1) {
         logErrno("ftok failed");
         return false;
+    }
+    for (int i = 0; i < kSpecialistCount; ++i) {
+        if (specKeys[i] == -1) {
+            logErrno("ftok failed for specialist queue");
+            return false;
+        }
     }
 
     // Best effort: remove stale queues from previous crashed runs.
@@ -104,11 +116,18 @@ bool createQueues(const std::string& keyPath, IpcIds& ids) {
     removeIfExists(logKey);
     removeIfExists(regKey);
     removeIfExists(triKey);
-    removeIfExists(specKey);
+    for (int i = 0; i < kSpecialistCount; ++i) {
+        removeIfExists(specKeys[i]);
+    }
 
     if (!logQ.create(logKey, 0600) || !regQ.create(regKey, 0600) ||
-        !triQ.create(triKey, 0600) || !specQ.create(specKey, 0600)) {
+        !triQ.create(triKey, 0600)) {
         return false;
+    }
+    for (int i = 0; i < kSpecialistCount; ++i) {
+        if (!specQs[i].create(specKeys[i], 0600)) {
+            return false;
+        }
     }
 
     // Increase per-queue capacity to avoid blocking when traffic spikes.
@@ -121,12 +140,16 @@ bool createQueues(const std::string& keyPath, IpcIds& ids) {
     tuneQueue(logQ.id());
     tuneQueue(regQ.id());
     tuneQueue(triQ.id());
-    tuneQueue(specQ.id());
+    for (int i = 0; i < kSpecialistCount; ++i) {
+        tuneQueue(specQs[i].id());
+    }
 
     ids.logQueue = logQ.id();
     ids.regQueue = regQ.id();
     ids.triageQueue = triQ.id();
-    ids.specialistsQueue = specQ.id();
+    for (int i = 0; i < kSpecialistCount; ++i) {
+        ids.specialistsQueue[i] = specQs[i].id();
+    }
     return true;
 }
 
@@ -192,6 +215,224 @@ bool createSharedState(const std::string& keyPath, IpcIds& ids, SharedState*& st
     return true;
 }
 
+std::string formatDuration(long long seconds) {
+    long long days = seconds / 86400;
+    seconds %= 86400;
+    long long hours = seconds / 3600;
+    seconds %= 3600;
+    long long minutes = seconds / 60;
+    seconds %= 60;
+    std::ostringstream oss;
+    oss << days << "d " << hours << "h " << minutes << "m " << seconds << "s";
+    return oss.str();
+}
+
+struct SpecialistNames {
+    static const char* name(int idx) {
+        switch (static_cast<SpecialistType>(idx)) {
+            case SpecialistType::Cardiologist: return "Cardiologist";
+            case SpecialistType::Neurologist: return "Neurologist";
+            case SpecialistType::Ophthalmologist: return "Ophthalmologist";
+            case SpecialistType::Laryngologist: return "Laryngologist";
+            case SpecialistType::Surgeon: return "Surgeon";
+            case SpecialistType::Paediatrician: return "Paediatrician";
+            default: return "Unknown";
+        }
+    }
+};
+
+struct SummaryPayload {
+    int totalPatients{0};
+    int waitingRoomCapacity{0};
+    int queueRegistrationLen{0};
+    int triageRed{0};
+    int triageYellow{0};
+    int triageGreen{0};
+    int triageSentHome{0};
+    int outcomeHome{0};
+    int outcomeWard{0};
+    int outcomeOther{0};
+    int timeScaleMsPerSimMinute{0};
+    int simulationDurationMinutes{0};
+    long long simulatedSeconds{0};
+    pid_t directorPid{0};
+    pid_t registration1Pid{0};
+    pid_t registration2Pid{0};
+    pid_t triagePid{0};
+    std::vector<pid_t> reg2History;
+    std::array<pid_t, kSpecialistCount> specialistPids{};
+};
+
+SummaryPayload buildPayload(const SharedState* state, long long simulatedSeconds,
+                            const std::vector<pid_t>& reg2History,
+                            const std::array<pid_t, kSpecialistCount>& specialistPids) {
+    SummaryPayload payload;
+    payload.totalPatients = state->totalPatients;
+    payload.waitingRoomCapacity = state->waitingRoomCapacity;
+    payload.queueRegistrationLen = state->queueRegistrationLen;
+    payload.triageRed = state->triageRed;
+    payload.triageYellow = state->triageYellow;
+    payload.triageGreen = state->triageGreen;
+    payload.triageSentHome = state->triageSentHome;
+    payload.outcomeHome = state->outcomeHome;
+    payload.outcomeWard = state->outcomeWard;
+    payload.outcomeOther = state->outcomeOther;
+    payload.timeScaleMsPerSimMinute = state->timeScaleMsPerSimMinute;
+    payload.simulationDurationMinutes = state->simulationDurationMinutes;
+    payload.simulatedSeconds = simulatedSeconds;
+    payload.directorPid = state->directorPid;
+    payload.registration1Pid = state->registration1Pid;
+    payload.registration2Pid = state->registration2Pid;
+    payload.triagePid = state->triagePid;
+    payload.reg2History = reg2History;
+    payload.specialistPids = specialistPids;
+    return payload;
+}
+
+std::string summaryBaseFromPath(const std::string& path) {
+    size_t pos = path.rfind('.');
+    if (pos == std::string::npos) return path;
+    return path.substr(0, pos);
+}
+
+std::string joinHistory(const std::vector<pid_t>& values) {
+    std::ostringstream oss;
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) oss << ", ";
+        oss << values[i];
+    }
+    return oss.str();
+}
+
+bool writeSummaryText(const SummaryPayload& payload, std::ofstream& out) {
+    out << "SOR Simulation Summary\n";
+    out << "======================\n";
+    out << "Total patients processed: " << payload.totalPatients << "\n";
+    out << "Waiting room capacity: " << payload.waitingRoomCapacity << "\n";
+    out << "Registered queue length at shutdown: " << payload.queueRegistrationLen << "\n";
+    out << "Triage outcomes:\n";
+    out << "  Red:    " << payload.triageRed << "\n";
+    out << "  Yellow: " << payload.triageYellow << "\n";
+    out << "  Green:  " << payload.triageGreen << "\n";
+    out << "  Sent home from triage: " << payload.triageSentHome << "\n";
+    out << "Final dispositions:\n";
+    out << "  Home:       " << payload.outcomeHome << "\n";
+    out << "  Ward:       " << payload.outcomeWard << "\n";
+    out << "  Other:      " << payload.outcomeOther << "\n";
+    out << "Time scale (ms per minute): " << payload.timeScaleMsPerSimMinute << "\n";
+    out << "Simulation duration (config minutes): " << payload.simulationDurationMinutes << "\n";
+    out << "Simulated elapsed time: " << formatDuration(payload.simulatedSeconds) << "\n";
+    out << "Process IDs:\n";
+    out << "  Director:      " << payload.directorPid << "\n";
+    out << "  Registration1: " << payload.registration1Pid << "\n";
+    out << "  Triage:        " << payload.triagePid << "\n";
+    out << "  Specialists:\n";
+    for (int i = 0; i < kSpecialistCount; ++i) {
+        out << "    " << SpecialistNames::name(i) << ": ";
+        if (payload.specialistPids[i] != 0) {
+            out << payload.specialistPids[i] << "\n";
+        } else {
+            out << "not spawned\n";
+        }
+    }
+    out << "Registration2 history: ";
+    if (payload.reg2History.empty()) {
+        out << "Not spawned during the simulation\n";
+    } else {
+        out << joinHistory(payload.reg2History) << "\n";
+    }
+    return true;
+}
+
+bool writeSummaryJson(const SummaryPayload& payload, const std::string& path) {
+    std::ofstream out(path, std::ios::out | std::ios::trunc);
+    if (!out) {
+        logErrno("summary json open failed");
+        return false;
+    }
+    out << "{\n";
+    out << "  \"totalPatients\": " << payload.totalPatients << ",\n";
+    out << "  \"waitingRoomCapacity\": " << payload.waitingRoomCapacity << ",\n";
+    out << "  \"queueRegistrationLen\": " << payload.queueRegistrationLen << ",\n";
+    out << "  \"triage\": {\n";
+    out << "    \"red\": " << payload.triageRed << ",\n";
+    out << "    \"yellow\": " << payload.triageYellow << ",\n";
+    out << "    \"green\": " << payload.triageGreen << ",\n";
+    out << "    \"sentHome\": " << payload.triageSentHome << "\n";
+    out << "  },\n";
+    out << "  \"dispositions\": {\n";
+    out << "    \"home\": " << payload.outcomeHome << ",\n";
+    out << "    \"ward\": " << payload.outcomeWard << ",\n";
+    out << "    \"other\": " << payload.outcomeOther << "\n";
+    out << "  },\n";
+    out << "  \"simulatedSeconds\": " << payload.simulatedSeconds << ",\n";
+    out << "  \"timeScaleMsPerSimMinute\": " << payload.timeScaleMsPerSimMinute << ",\n";
+    out << "  \"simulationDurationMinutes\": " << payload.simulationDurationMinutes << ",\n";
+    out << "  \"processes\": {\n";
+    out << "    \"director\": " << payload.directorPid << ",\n";
+    out << "    \"registration1\": " << payload.registration1Pid << ",\n";
+    out << "    \"triage\": " << payload.triagePid << ",\n";
+    out << "    \"specialists\": {\n";
+    for (int i = 0; i < kSpecialistCount; ++i) {
+        out << "      \"" << SpecialistNames::name(i) << "\": " << payload.specialistPids[i];
+        if (i < kSpecialistCount - 1) out << ",\n";
+        else out << "\n";
+    }
+    out << "    }\n";
+    out << "  },\n";
+    out << "  \"registration2History\": [";
+    for (size_t i = 0; i < payload.reg2History.size(); ++i) {
+        if (i > 0) out << ", ";
+        out << payload.reg2History[i];
+    }
+    out << "]\n";
+    out << "}\n";
+    return true;
+}
+
+bool writeSummaryCsv(const SummaryPayload& payload, const std::string& path) {
+    std::ofstream out(path, std::ios::out | std::ios::trunc);
+    if (!out) {
+        logErrno("summary csv open failed");
+        return false;
+    }
+    out << "key,value\n";
+    out << "totalPatients," << payload.totalPatients << "\n";
+    out << "waitingRoomCapacity," << payload.waitingRoomCapacity << "\n";
+    out << "queueRegistrationLen," << payload.queueRegistrationLen << "\n";
+    out << "triageRed," << payload.triageRed << "\n";
+    out << "triageYellow," << payload.triageYellow << "\n";
+    out << "triageGreen," << payload.triageGreen << "\n";
+    out << "triageSentHome," << payload.triageSentHome << "\n";
+    out << "outcomeHome," << payload.outcomeHome << "\n";
+    out << "outcomeWard," << payload.outcomeWard << "\n";
+    out << "outcomeOther," << payload.outcomeOther << "\n";
+    out << "simulatedSeconds," << payload.simulatedSeconds << "\n";
+    out << "timeScaleMsPerSimMinute," << payload.timeScaleMsPerSimMinute << "\n";
+    out << "simulationDurationMinutes," << payload.simulationDurationMinutes << "\n";
+    out << "directorPid," << payload.directorPid << "\n";
+    out << "registration1Pid," << payload.registration1Pid << "\n";
+    out << "triagePid," << payload.triagePid << "\n";
+    for (int i = 0; i < kSpecialistCount; ++i) {
+        out << "specialist_" << SpecialistNames::name(i) << "," << payload.specialistPids[i] << "\n";
+    }
+    out << "registration2History,\"" << joinHistory(payload.reg2History) << "\"\n";
+    return true;
+}
+
+bool writeSummary(const SummaryPayload& payload, const std::string& path) {
+    std::ofstream out(path, std::ios::out | std::ios::trunc);
+    if (!out) {
+        logErrno("summary file open failed");
+        return false;
+    }
+    if (!writeSummaryText(payload, out)) {
+        return false;
+    }
+    std::string base = summaryBaseFromPath(path);
+    return writeSummaryJson(payload, base + ".json") && writeSummaryCsv(payload, base + ".csv");
+}
+
 void destroyIpc(const IpcIds& ids, SharedState* attachedState) {
     if (attachedState) {
         shmdt(attachedState);
@@ -211,9 +452,11 @@ void destroyIpc(const IpcIds& ids, SharedState* attachedState) {
             logErrno("cleanup triage queue failed");
         }
     }
-    if (ids.specialistsQueue != -1) {
-        if (msgctl(ids.specialistsQueue, IPC_RMID, nullptr) == -1) {
-            logErrno("cleanup specialists queue failed");
+    for (int qid : ids.specialistsQueue) {
+        if (qid != -1) {
+            if (msgctl(qid, IPC_RMID, nullptr) == -1) {
+                logErrno("cleanup specialists queue failed");
+            }
         }
     }
     if (ids.shmId != -1) {
@@ -236,6 +479,7 @@ void destroyIpc(const IpcIds& ids, SharedState* attachedState) {
 
 int Director::run(const std::string& selfPath, const Config& config) {
     IpcIds ids;
+    ids.specialistsQueue.fill(-1);
     SharedState* shared = nullptr;
     bool ok = true;
     Semaphore stateSemGuard;
@@ -401,6 +645,8 @@ int Director::run(const std::string& selfPath, const Config& config) {
         }
     }
     std::vector<pid_t> specialistPids;
+    std::array<pid_t, kSpecialistCount> specialistPidMap{};
+    std::vector<pid_t> reg2History;
     if (ok) {
         int specCount = 6;
         for (int i = 0; i < specCount; ++i) {
@@ -422,6 +668,7 @@ int Director::run(const std::string& selfPath, const Config& config) {
                 _exit(1);
             } else {
                 specialistPids.push_back(pid);
+                specialistPidMap[i] = pid;
                 logEvent(ids.logQueue, Role::Director, simNow(), "Specialist spawned type " + std::to_string(i));
             }
         }
@@ -497,6 +744,7 @@ int Director::run(const std::string& selfPath, const Config& config) {
                     _exit(1);
                 } else if (pid > 0) {
                     reg2Pid = pid;
+                    reg2History.push_back(pid);
                     stateSemGuard.wait();
                     shared->reg2Active = 1;
                     shared->registration2Pid = pid;
@@ -562,6 +810,23 @@ int Director::run(const std::string& selfPath, const Config& config) {
     }
     waitWithTimeout(generatorPid, "patient_generator");
 
+    // write final summary before logger shuts down
+    if (shared && ids.logQueue != -1) {
+        std::string summaryPath = "sor_summary_" + std::to_string(static_cast<long long>(std::time(nullptr))) + ".txt";
+        long long nowMs = monotonicMs();
+        long long simulatedSeconds = 0;
+        if (shared->timeScaleMsPerSimMinute > 0) {
+            long long deltaMs = nowMs - shared->simStartMonotonicMs;
+            if (deltaMs < 0) deltaMs = 0;
+            long long simulatedMinutes = deltaMs / shared->timeScaleMsPerSimMinute;
+            long long remainderMs = deltaMs % shared->timeScaleMsPerSimMinute;
+            simulatedSeconds = simulatedMinutes * 60 + (remainderMs * 60) / shared->timeScaleMsPerSimMinute;
+        }
+        SummaryPayload payload = buildPayload(shared, simulatedSeconds, reg2History, specialistPidMap);
+        if (writeSummary(payload, summaryPath)) {
+            logEvent(ids.logQueue, Role::Director, stopSimTime, "Summary saved: " + summaryPath);
+        }
+    }
     // send termination marker for logger after children have had a chance to log shutdown
     if (ok) {
         logEvent(ids.logQueue, Role::Director, stopSimTime, "END");

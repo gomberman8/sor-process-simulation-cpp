@@ -10,6 +10,7 @@
 #include "util/error.hpp"
 #include "util/random.hpp"
 
+#include <array>
 #include <atomic>
 #include <csignal>
 #include <cstring>
@@ -99,7 +100,7 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
 
     key_t regKey = ftok(keyPath.c_str(), 'R');
     key_t triKey = ftok(keyPath.c_str(), 'T');
-    key_t specKey = ftok(keyPath.c_str(), 'S');
+    key_t specKey = ftok(keyPath.c_str(), 'A' + static_cast<int>(type));
     key_t logKey = ftok(keyPath.c_str(), 'L');
     key_t semStateKey = ftok(keyPath.c_str(), 'M');
     key_t waitKey = ftok(keyPath.c_str(), 'W');
@@ -132,7 +133,10 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
     if (triKey != -1) {
         triageQueueId = msgget(triKey, 0);
     }
-    setLogMetricsContext({statePtr, registrationQueueId, triageQueueId, specQueue.id(),
+    std::array<int, kSpecialistCount> specQueueIds;
+    specQueueIds.fill(-1);
+    specQueueIds[static_cast<int>(type)] = specQueue.id();
+    setLogMetricsContext({statePtr, registrationQueueId, triageQueueId, specQueueIds,
                           waitSem.id(), stateSem.id()});
 
     Role asRole = roleForType(type);

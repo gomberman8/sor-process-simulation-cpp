@@ -11,6 +11,7 @@
 #include "util/error.hpp"
 #include "util/random.hpp"
 
+#include <array>
 #include <atomic>
 #include <csignal>
 #include <string>
@@ -75,7 +76,6 @@ int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
     MessageQueue logQueue;
     key_t regKey = ftok(keyPath.c_str(), 'R');
     key_t triKey = ftok(keyPath.c_str(), 'T');
-    key_t specKey = ftok(keyPath.c_str(), 'S');
     if (logKey != -1 && logQueue.open(logKey)) {
         logId = logQueue.id();
     }
@@ -92,17 +92,15 @@ int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
 
     int regQueueId = -1;
     int triQueueId = -1;
-    int specialistsQueueId = -1;
     if (regKey != -1) {
         regQueueId = msgget(regKey, 0);
     }
     if (triKey != -1) {
         triQueueId = msgget(triKey, 0);
     }
-    if (specKey != -1) {
-        specialistsQueueId = msgget(specKey, 0);
-    }
-    setLogMetricsContext({statePtr, regQueueId, triQueueId, specialistsQueueId,
+    std::array<int, kSpecialistCount> specQueueIds;
+    specQueueIds.fill(-1);
+    setLogMetricsContext({statePtr, regQueueId, triQueueId, specQueueIds,
                           -1, stateSem.id()});
     int simTime = currentSimMinutes(statePtr);
     if (logId != -1) {

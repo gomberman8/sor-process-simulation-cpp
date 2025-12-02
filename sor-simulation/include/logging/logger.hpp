@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <string>
 
 #include "model/types.hpp"
@@ -59,7 +60,7 @@ struct LogMetricsContext {
     SharedState* sharedState;
     int registrationQueueId;
     int triageQueueId;
-    int specialistsQueueId;
+    std::array<int, kSpecialistCount> specialistsQueueIds;
     int waitSemaphoreId;
     int stateSemaphoreId;
 };

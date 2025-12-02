@@ -9,6 +9,7 @@
 #include "model/types.hpp"
 #include "util/error.hpp"
 
+#include <array>
 #include <atomic>
 #include <csignal>
 #include <cstring>
@@ -66,12 +67,11 @@ int Registration::run(const std::string& keyPath, bool isSecond) {
 
     key_t regKey = ftok(keyPath.c_str(), 'R');
     key_t triKey = ftok(keyPath.c_str(), 'T');
-    key_t specKey = ftok(keyPath.c_str(), 'S');
     key_t logKey = ftok(keyPath.c_str(), 'L');
     key_t semStateKey = ftok(keyPath.c_str(), 'M');
     key_t shmKey = ftok(keyPath.c_str(), 'H');
 
-    if (regKey == -1 || triKey == -1 || specKey == -1 || logKey == -1 ||
+    if (regKey == -1 || triKey == -1 || logKey == -1 ||
         semStateKey == -1 || shmKey == -1) {
         logErrno("Registration ftok failed");
         return 1;
@@ -90,11 +90,9 @@ int Registration::run(const std::string& keyPath, bool isSecond) {
         return 1;
     }
 
-    int specialistsQueueId = -1;
-    if (specKey != -1) {
-        specialistsQueueId = msgget(specKey, 0);
-    }
-    setLogMetricsContext({statePtr, regQueue.id(), triageQueue.id(), specialistsQueueId,
+    std::array<int, kSpecialistCount> specQueueIds;
+    specQueueIds.fill(-1);
+    setLogMetricsContext({statePtr, regQueue.id(), triageQueue.id(), specQueueIds,
                           -1, stateSem.id()});
 
     Role myRole = isSecond ? Role::Registration2 : Role::Registration1;

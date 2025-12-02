@@ -10,6 +10,7 @@
 #include "util/error.hpp"
 #include "util/random.hpp"
 
+#include <array>
 #include <atomic>
 #include <csignal>
 #include <cstring>
@@ -88,7 +89,7 @@ int Triage::run(const std::string& keyPath) {
     sigaction(SIGUSR2, &sa, nullptr);
 
     MessageQueue triageQueue;
-    MessageQueue specQueue;
+    std::array<MessageQueue, kSpecialistCount> specQueues;
     MessageQueue logQueue;
     Semaphore stateSem;
     Semaphore waitSem;
@@ -96,19 +97,37 @@ int Triage::run(const std::string& keyPath) {
 
     key_t regKey = ftok(keyPath.c_str(), 'R');
     key_t triKey = ftok(keyPath.c_str(), 'T');
-    key_t specKey = ftok(keyPath.c_str(), 'S');
+    std::array<key_t, kSpecialistCount> specKeys;
+    for (int i = 0; i < kSpecialistCount; ++i) {
+        specKeys[i] = ftok(keyPath.c_str(), 'A' + i);
+    }
     key_t logKey = ftok(keyPath.c_str(), 'L');
     key_t semStateKey = ftok(keyPath.c_str(), 'M');
     key_t waitKey = ftok(keyPath.c_str(), 'W');
     key_t shmKey = ftok(keyPath.c_str(), 'H');
 
-    if (regKey == -1 || triKey == -1 || specKey == -1 || logKey == -1 ||
+    if (regKey == -1 || triKey == -1 || logKey == -1 ||
         semStateKey == -1 || waitKey == -1 || shmKey == -1) {
         logErrno("Triage ftok failed");
         return 1;
     }
-    if (!triageQueue.open(triKey) || !specQueue.open(specKey) || !logQueue.open(logKey)) {
+    for (int i = 0; i < kSpecialistCount; ++i) {
+        if (specKeys[i] == -1) {
+            logErrno("Triage ftok failed");
+            return 1;
+        }
+    }
+    if (!triageQueue.open(triKey) || !logQueue.open(logKey)) {
         return 1;
+    }
+    std::array<int, kSpecialistCount> specQueueIds;
+    specQueueIds.fill(-1);
+    for (int i = 0; i < kSpecialistCount; ++i) {
+        if (!specQueues[i].open(specKeys[i])) {
+            logErrno("Triage spec queue open failed");
+            return 1;
+        }
+        specQueueIds[i] = specQueues[i].id();
     }
     if (!stateSem.open(semStateKey) || !waitSem.open(waitKey)) {
         return 1;
@@ -125,7 +144,7 @@ int Triage::run(const std::string& keyPath) {
     if (regKey != -1) {
         registrationQueueId = msgget(regKey, 0);
     }
-    setLogMetricsContext({statePtr, registrationQueueId, triageQueue.id(), specQueue.id(),
+    setLogMetricsContext({statePtr, registrationQueueId, triageQueue.id(), specQueueIds,
                           waitSem.id(), stateSem.id()});
 
     int simTime = currentSimMinutes(statePtr);
@@ -182,16 +201,18 @@ int Triage::run(const std::string& keyPath) {
             waitSem.post();
         }
 
-        ev.mtype = static_cast<long>(EventType::PatientToSpecialist);
+        long routedType = static_cast<long>(EventType::PatientToSpecialist) +
+                          static_cast<int>(spec) * 10 + colorPriority(color);
+        ev.mtype = routedType;
         ev.specialistIdx = static_cast<int>(spec);
         ev.triageColor = static_cast<int>(color);
 
-        long routedType = ev.mtype + ev.specialistIdx * 10 + colorPriority(color); // per-specialist priority mtype
         // Non-blocking send with retry to avoid stalling if specialist queue is momentarily full.
         size_t payloadSize = sizeof(EventMessage) - sizeof(long);
         bool sent = false;
         while (!sent) {
-            if (msgsnd(specQueue.id(), &ev, payloadSize, IPC_NOWAIT) == 0) {
+            MessageQueue& targetQueue = specQueues[static_cast<int>(spec)];
+            if (msgsnd(targetQueue.id(), &ev, payloadSize, IPC_NOWAIT) == 0) {
                 sent = true;
                 break;
             }

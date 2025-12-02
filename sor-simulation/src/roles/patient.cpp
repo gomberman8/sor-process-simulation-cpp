@@ -10,6 +10,7 @@
 #include "util/error.hpp"
 
 #include <atomic>
+#include <array>
 #include <csignal>
 #include <pthread.h>
 #include <cstring>
@@ -83,13 +84,12 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
 
     key_t regKey = ftok(keyPath.c_str(), 'R');
     key_t triKey = ftok(keyPath.c_str(), 'T');
-    key_t specKey = ftok(keyPath.c_str(), 'S');
     key_t logKey = ftok(keyPath.c_str(), 'L');
     key_t waitKey = ftok(keyPath.c_str(), 'W');
     key_t stateKey = ftok(keyPath.c_str(), 'M');
     key_t shmKey = ftok(keyPath.c_str(), 'H');
 
-    if (regKey == -1 || triKey == -1 || specKey == -1 || logKey == -1 ||
+    if (regKey == -1 || triKey == -1 || logKey == -1 ||
         waitKey == -1 || stateKey == -1 || shmKey == -1) {
         logErrno("Patient ftok failed");
         return 1;
@@ -109,14 +109,12 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
     }
 
     int triageQueueId = -1;
-    int specialistsQueueId = -1;
     if (triKey != -1) {
         triageQueueId = msgget(triKey, 0);
     }
-    if (specKey != -1) {
-        specialistsQueueId = msgget(specKey, 0);
-    }
-    setLogMetricsContext({statePtr, regQueue.id(), triageQueueId, specialistsQueueId,
+    std::array<int, kSpecialistCount> specQueueIds;
+    specQueueIds.fill(-1);
+    setLogMetricsContext({statePtr, regQueue.id(), triageQueueId, specQueueIds,
                           waitSem.id(), stateSem.id()});
 
     // Spawn a lightweight thread to model the child presence (if any).

@@ -3,7 +3,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <cerrno>
-#include <cstring>
+#include <cstdio>
 
 void die(const std::string& message) {
     std::cerr << message << std::endl;
@@ -11,10 +11,9 @@ void die(const std::string& message) {
 }
 
 void logErrno(const std::string& message) {
-    int err = errno;
-    std::cerr << message;
-    if (err != 0) {
-        std::cerr << " (errno=" << err << " \"" << std::strerror(err) << "\")";
+    if (!message.empty()) {
+        perror(message.c_str());
+    } else {
+        perror(nullptr);
     }
-    std::cerr << std::endl;
 }

@@ -96,7 +96,10 @@ MetricsSnapshot collectMetrics() {
     }
     metrics.registrationQueueLen = queueLength(g_logMetricsContext.registrationQueueId);
     metrics.triageQueueLen = queueLength(g_logMetricsContext.triageQueueId);
-    metrics.specialistsQueueLen = queueLength(g_logMetricsContext.specialistsQueueId);
+    metrics.specialistsQueueLen = 0;
+    for (int qid : g_logMetricsContext.specialistsQueueIds) {
+        metrics.specialistsQueueLen += queueLength(qid);
+    }
     metrics.waitSemaphoreValue = semaphoreValue(g_logMetricsContext.waitSemaphoreId);
     metrics.stateSemaphoreValue = semaphoreValue(g_logMetricsContext.stateSemaphoreId);
     return metrics;
