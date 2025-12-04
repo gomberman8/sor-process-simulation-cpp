@@ -82,6 +82,7 @@ int realMinutesFrom(long long startMs) {
     return static_cast<int>(delta / 60000); // 60s * 1000ms
 }
 
+/** @brief Set up logger/registration/triage/specialist queues, clearing stale ones and tuning capacity. */
 bool createQueues(const std::string& keyPath, IpcIds& ids) {
     MessageQueue logQ;
     MessageQueue regQ;
@@ -153,6 +154,7 @@ bool createQueues(const std::string& keyPath, IpcIds& ids) {
     return true;
 }
 
+/** @brief Create waiting-room and shared-state semaphores; remove stale sets first. */
 bool createSemaphores(const std::string& keyPath, const Config& cfg, IpcIds& ids) {
     key_t waitKey = ftok(keyPath.c_str(), 'W');
     key_t stateKey = ftok(keyPath.c_str(), 'M');
@@ -188,6 +190,7 @@ bool createSemaphores(const std::string& keyPath, const Config& cfg, IpcIds& ids
     return true;
 }
 
+/** @brief Allocate and attach shared memory for SharedState, wiping any leftovers. */
 bool createSharedState(const std::string& keyPath, IpcIds& ids, SharedState*& stateOut) {
     SharedMemory shm;
     key_t shmKey = ftok(keyPath.c_str(), 'H');
@@ -477,6 +480,13 @@ void destroyIpc(const IpcIds& ids, SharedState* attachedState) {
 }
 } // namespace
 
+/**
+ * @brief Full orchestrator: create IPC, fork/exec children, manage signals, write summary, and clean up IPC.
+ * @param selfPath path to current executable (used for all execv calls).
+ * @param config validated simulation configuration.
+ * @param logPathOverride optional log path (nullptr -> timestamped default).
+ * @return 0 on clean shutdown, non-zero on failure.
+ */
 int Director::run(const std::string& selfPath, const Config& config, const std::string* logPathOverride) {
     IpcIds ids;
     ids.specialistsQueue.fill(-1);
@@ -677,6 +687,7 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
         }
     }
 
+    // Wait for child exit with timeout; fall back to SIGKILL + waitpid to avoid zombies.
     auto waitWithTimeout = [&](pid_t pid, const std::string& name) {
         if (pid <= 0) return;
         int status = 0;

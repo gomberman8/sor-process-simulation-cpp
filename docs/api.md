@@ -1,212 +1,60 @@
-# SOR Simulation – API & Expected Behaviors
+# SOR Simulation – Implementation Guide
 
-This document describes the intended behavior, inputs, outputs, and example usage for all custom classes/functions currently present in the skeleton. Implementations are stubs right now; use these contracts when filling in real logic.
+Concise reference of the IPC-heavy workflow with links into the code (paths are repo-local and line-precise).
 
-## IPC Wrappers
+## Runtime workflow (permalinks)
+- **Director** – boots IPC (`ftok`/`msgget`/`semget`/`shmget`), spawns children with `fork()`/`execv()`, coordinates shutdown with `kill()`/`waitpid()`, and removes IPC via `IPC_RMID`/`semctl`/`shmctl`. See [queues](https://github.com/gomberman8/sor-process-simulation-cpp/blob/f0c512978a7176c23f62294852002bc0c4ef3e87/sor-simulation/src/director.cpp#L85-L156), [semaphores](https://github.com/gomberman8/sor-process-simulation-cpp/blob/f0c512978a7176c23f62294852002bc0c4ef3e87/sor-simulation/src/director.cpp#L158-L193), [shared memory](https://github.com/gomberman8/sor-process-simulation-cpp/blob/f0c512978a7176c23f62294852002bc0c4ef3e87/sor-simulation/src/director.cpp#L195-L221), and [process lifecycle](https://github.com/gomberman8/sor-process-simulation-cpp/blob/f0c512978a7176c23f62294852002bc0c4ef3e87/sor-simulation/src/director.cpp#L486-L735).
+- **Logger** – dedicated process blocking on `msgrcv()` until an `END` marker, writing lines to a file opened with `open()/write()/close()`: [runLogger](https://github.com/gomberman8/sor-process-simulation-cpp/blob/f0c512978a7176c23f62294852002bc0c4ef3e87/sor-simulation/src/logging/logger.cpp#L130-L178).
+- **PatientGenerator** – opens existing IPC via `ftok`/`msgget`/`shmget`/`semget`, then repeatedly `fork()`/`execv()` patients, using `waitpid()`/`kill()` for cleanup: [run](https://github.com/gomberman8/sor-process-simulation-cpp/blob/f0c512978a7176c23f62294852002bc0c4ef3e87/sor-simulation/src/roles/patient_generator.cpp#L57-L220).
+- **Patient** – attaches to queues/semaphores/shared memory, acquires waiting-room slots with `semop`, enqueues via `msgsnd()`, and responds to `SIGUSR2`: [run](https://github.com/gomberman8/sor-process-simulation-cpp/blob/f0c512978a7176c23f62294852002bc0c4ef3e87/sor-simulation/src/roles/patient.cpp#L65-L199).
+- **Registration** – pulls from the registration queue with `msgrcv()`, updates shared counters, forwards to triage via `msgsnd()`, exits on `SIGUSR2`: [run](https://github.com/gomberman8/sor-process-simulation-cpp/blob/f0c512978a7176c23f62294852002bc0c4ef3e87/sor-simulation/src/roles/registration.cpp#L46-L160).
+- **Triage** – consumes from triage with `msgrcv()`, posts semaphores for patients sent home, routes others to specialists with `msgsnd()`: [run](https://github.com/gomberman8/sor-process-simulation-cpp/blob/f0c512978a7176c23f62294852002bc0c4ef3e87/sor-simulation/src/roles/triage.cpp#L77-L237).
+- **Specialist** – handles `SIGUSR1`/`SIGUSR2`, receives prioritized patients with `msgrcv()`, updates outcomes in shared memory, logs: [run](https://github.com/gomberman8/sor-process-simulation-cpp/blob/f0c512978a7176c23f62294852002bc0c4ef3e87/sor-simulation/src/roles/specialist.cpp#L75-L211).
 
-### `MessageQueue` (`ipc/message_queue.hpp/.cpp`)
-- **Purpose:** Thin RAII-ish wrapper over System V message queues.
-- **Methods:**
-  - `bool create(key_t key, int permissions = 0600);`
-    - Creates/opens a queue with minimal required permissions.
-    - **Returns:** `true` on success; `false` on failure (log `errno`).
-    - **Example:**  
-      ```cpp
-      MessageQueue mq;
-      if (!mq.create(IPC_PRIVATE, 0600)) { /* handle error */ }
-      ```
-  - `bool send(const void* msg, size_t size, long type);`
-    - Wraps `msgsnd`; sends `size` bytes where `((long*)msg)[0]` equals `type`.
-    - **Returns:** `true` on success; `false` on failure.
-    - **Example:**  
-      ```cpp
-      EventMessage ev{}; ev.mtype = static_cast<long>(EventType::PatientArrived);
-      mq.send(&ev, sizeof(ev), ev.mtype);
-      ```
-  - `bool receive(void* buffer, size_t size, long type, int flags = 0);`
-    - Wraps `msgrcv`; reads message of `type` (or first if `type == 0`).
-    - **Returns:** `true` on success; `false` on failure.
-    - **Example:**  
-  ```cpp
-  EventMessage ev{};
-  mq.receive(&ev, sizeof(ev), static_cast<long>(EventType::PatientArrived));
-  ```
-  - `int id() const;` → the underlying queue id (`-1` if not created).
-  - `bool destroy();` → IPC_RMID.
-  - `bool open(key_t key);` → open existing queue without creating.
+## IPC wrappers (SysV)
+- **MessageQueue** (`msgget`/`msgsnd`/`msgrcv`/`msgctl`):
+  - create: `sor-simulation/src/ipc/message_queue.cpp:14`
+  - send: `sor-simulation/src/ipc/message_queue.cpp:24`
+  - receive: `sor-simulation/src/ipc/message_queue.cpp:47`
+  - destroy: `sor-simulation/src/ipc/message_queue.cpp:70`
+  - open: `sor-simulation/src/ipc/message_queue.cpp:83`
+- **SharedMemory** (`shmget`/`shmat`/`shmdt`/`shmctl`):
+  - create: `sor-simulation/src/ipc/shared_memory.cpp:14`
+  - attach: `sor-simulation/src/ipc/shared_memory.cpp:25`
+  - detach: `sor-simulation/src/ipc/shared_memory.cpp:39`
+  - destroy: `sor-simulation/src/ipc/shared_memory.cpp:52`
+  - open: `sor-simulation/src/ipc/shared_memory.cpp:65`
+- **Semaphore** (`semget`/`semop`/`semctl`):
+  - create: `sor-simulation/src/ipc/semaphore.cpp:14`
+  - wait (P): `sor-simulation/src/ipc/semaphore.cpp:28`
+  - post (V): `sor-simulation/src/ipc/semaphore.cpp:45`
+  - destroy: `sor-simulation/src/ipc/semaphore.cpp:62`
+  - open: `sor-simulation/src/ipc/semaphore.cpp:75`
+- **Signals** (`sigaction`):
+  - setHandler: `sor-simulation/src/ipc/signals.cpp:23`
+  - ignore: `sor-simulation/src/ipc/signals.cpp:38`
 
-### `SharedMemory` (`ipc/shared_memory.hpp/.cpp`)
-- **Purpose:** Manage System V shared memory segment for `SharedState`.
-- **Methods:**
-  - `bool create(key_t key, size_t size, int permissions = 0600);`
-    - Calls `shmget`; stores `size` for validation.
-    - **Returns:** `true` on success; `false` otherwise.
-  - `void* attach();`
-    - Calls `shmat`; **Returns:** mapped address on success; `nullptr` on failure.
-  - `bool detach(const void* addr);`
-    - Calls `shmdt`; **Returns:** `true` on success.
-  - `bool destroy();`
-    - Calls `shmctl(..., IPC_RMID, ...)`; **Returns:** `true` on success.
-  - `bool open(key_t key);` open existing segment by key.
-  - `int id() const;` → underlying shm id (`-1` if not created).
-- **Example:**  
-  ```cpp
-  SharedMemory shm;
-  shm.create(IPC_PRIVATE, sizeof(SharedState));
-  auto* state = static_cast<SharedState*>(shm.attach());
-  // use state...
-  shm.detach(state);
-  shm.destroy();
-  ```
+## Roles (what each does)
+- **Director** – owns lifecycle and IPC cleanup (`sor-simulation/src/director.cpp:486`).
+- **PatientGenerator** – produces patients at the configured pace (`sor-simulation/src/roles/patient_generator.cpp:57`).
+- **Patient** – models entry, waiting-room semaphore usage, and queueing (`sor-simulation/src/roles/patient.cpp:65`).
+- **Registration** – dequeues arrivals, forwards to triage (`sor-simulation/src/roles/registration.cpp:46`).
+- **Triage** – color assignment, optional dismissal, specialist routing (`sor-simulation/src/roles/triage.cpp:77`).
+- **Specialist** – exam/outcome, responds to director signals (`sor-simulation/src/roles/specialist.cpp:75`).
+- **Logger** – consumes log queue and writes to file (`sor-simulation/src/logging/logger.cpp:130`).
 
-### `Semaphore` (`ipc/semaphore.hpp/.cpp`)
-- **Purpose:** System V counting/binary semaphore wrapper.
-- **Methods:**
-  - `bool create(key_t key, int initialValue, int permissions = 0600);`
-    - Uses `semget` + `semctl` to init value.
-    - **Returns:** `true` on success.
-  - `bool wait();`
-    - P operation (`semop` with `-1`); **Returns:** `true` on success.
-  - `bool post();`
-    - V operation (`semop` with `+1`); **Returns:** `true` on success.
-  - `bool destroy();`
-    - `semctl(IPC_RMID)`; **Returns:** `true` on success.
-  - `bool open(key_t key);` open existing set by key.
-  - `int id() const;` → semaphore set id (`-1` if not created).
-- **Example:**  
-  ```cpp
-  Semaphore sem;
-  sem.create(IPC_PRIVATE, 1);
-  sem.wait();
-  // critical section
-  sem.post();
-  sem.destroy();
-  ```
+## Role entrypoints (exact lines)
+- Director::run: `sor-simulation/src/director.cpp:490`
+- runLogger/logEvent: `sor-simulation/src/logging/logger.cpp:130` / `sor-simulation/src/logging/logger.cpp:193`
+- PatientGenerator::run: `sor-simulation/src/roles/patient_generator.cpp:57`
+- Patient::run: `sor-simulation/src/roles/patient.cpp:65`
+- Registration::run: `sor-simulation/src/roles/registration.cpp:46`
+- Triage::run: `sor-simulation/src/roles/triage.cpp:77`
+- Specialist::run: `sor-simulation/src/roles/specialist.cpp:75`
 
-### `Signals` (`ipc/signals.hpp/.cpp`)
-- **Purpose:** Helper for installing simple C++ lambda/`std::function` handlers.
-- **Functions:**
-  - `bool setHandler(int signum, Handler handler);`
-    - Registers a handler invoked with the signal number.
-    - **Returns:** `true` on success.
-  - `void ignore(int signum);`
-    - Installs `SIG_IGN` for given signal.
-- **Example:**  
-  ```cpp
-  Signals::setHandler(SIGUSR2, [](int){ /* cleanup and exit */ });
-  Signals::ignore(SIGPIPE);
-  ```
+## Data structures
+- **Events & roles**: enums and message payloads in `sor-simulation/include/model/events.hpp` and `sor-simulation/include/model/types.hpp`.
+- **Shared state**: counts, queue lengths, and PIDs in `sor-simulation/include/model/shared_state.hpp`.
+- **Config**: runtime knobs in `sor-simulation/include/model/config.hpp` and `sor-simulation/config.cfg`.
 
-## Logging
-
-### `Logger` (`logging/logger.hpp/.cpp`)
-- **Purpose:** Dedicated process writing lines to a log file.
-- **Methods:**
-  - `Logger();` / `explicit Logger(const std::string& path);`
-    - Default ctor leaves `fd = -1`; path ctor calls `openFile(path)`.
-  - `bool openFile(const std::string& path);`
-    - Uses `open`/`creat` with minimal permissions.
-    - **Returns:** `true` on success; `false` otherwise.
-  - `void logLine(const std::string& line);`
-    - Writes a single line (plus newline) if `fd` valid.
-  - `void closeFile();`
-    - Closes descriptor if open.
-  - `int runLogger(int queueId, const std::string& path);`
-    - Blocking loop reading `LogMessage` from LOG_QUEUE and writing to file; stops on `"END"` text marker.
-  - `bool logEvent(int queueId, Role role, int simTime, const std::string& text);`
-    - Convenience helper to send `LogMessage` via an existing queue id.
-- **Example:**  
-  ```cpp
-  Logger logger("sor.log");
-  logger.logLine("[SIM=0001][PID=1234][ROLE=TRIAGE] patient triaged");
-  logger.closeFile();
-  ```
-- **Format used by runLogger:** semicolon-separated `simTime;pid;role;text` for easy CSV/chart imports (one line per message).
-
-## Utility
-
-### `RandomGenerator` (`util/random.hpp/.cpp`)
-- **Purpose:** Deterministic or random PRNG for simulation timings.
-- **Methods:**
-  - `RandomGenerator();` seeds with `std::random_device`.
-  - `explicit RandomGenerator(unsigned int seed);` deterministic seed.
-  - `int uniformInt(int min, int max);` inclusive range.
-  - `double uniformReal(double min, double max);` inclusive of min, exclusive of max.
-- **Example:**  
-  ```cpp
-  RandomGenerator rng(42);
-  int triage = rng.uniformInt(0, 99);   // 0..99
-  double waitMs = rng.uniformReal(5.0, 10.0);
-  ```
-
-### Error Helpers (`util/error.hpp/.cpp`)
-- **Purpose:** Centralized error reporting for system calls.
-- **Functions:**
-  - `void die(const std::string& message);`
-    - Prints message to `stderr`, exits non-zero.
-  - `void logErrno(const std::string& message);`
-    - Prints message plus `errno` details (to be implemented).
-- **Example:**  
-  ```cpp
-  if (someSyscall() == -1) logErrno("someSyscall failed");
-  ```
-
-## Roles / Processes
-
-### `Director` (`director.hpp/.cpp`)
-- **Purpose:** Main orchestrator; sets up IPC, spawns all child roles, handles signals/cleanup.
-- **Method:**
-  - `int run(const std::string& selfPath, const Config& config);`
-    - Expected to return `0` on clean shutdown; non-zero on failure.
-    - `selfPath` is used to `exec` child roles (logger now, later others).
-    - Director initializes SysV IPC (queues, semaphores, shared memory) via `ftok`, spawns Logger, Registration1, Triage, all Specialists, and PatientGenerator via fork+exec of the same binary. Uses a process group and sends SIGUSR2 to the whole group for shutdown; force-kills stragglers after a timeout, then IPC_RMID.
-- **Example:**  
-  ```cpp
-  int main() { Director d; return d.run(); }
-  ```
-
-### `PatientGenerator` (`roles/patient_generator.hpp/.cpp`)
-- **Purpose:** Periodically spawns `Patient` processes with randomized attributes.
-- **Method:**
-  - `int run(const std::string& keyPath, const Config& cfg);` → 0 on normal stop. Forks/execs patient processes using config (time scale/seed); runs until SIGUSR2. Passes attributes via argv; responds to SIGUSR2 by signaling children and waiting.
-
-### `Patient` (`roles/patient.hpp/.cpp`)
-- **Purpose:** Models a single (possibly child+guardian) patient moving through SOR pipeline.
-- **Method:**
-  - `int run(const std::string& keyPath, int patientId, int age, bool isVip, bool hasGuardian, int personsCount);` → 0 on completion or orderly SIGUSR2 shutdown. Opens IPC via `ftok(keyPath, ...)`, acquires waiting-room slots via semaphore, updates shared state, sends EventMessage to REGISTRATION queue, logs, releases resources.
-
-### `Registration` (`roles/registration.hpp/.cpp`)
-- **Purpose:** Represents one registration window consuming from `REGISTRATION_QUEUE`.
-- **Method:**
-  - `int run(const std::string& keyPath);` → 0 on normal exit. Opens IPC via `ftok(keyPath, ...)`, reads from REG queue, updates shared state under semaphore, forwards to TRIAGE queue, logs activity, exits cleanly on SIGUSR2.
-
-### `Triage` (`roles/triage.hpp/.cpp`)
-- **Purpose:** Assigns triage color, optionally sends home, forwards to specialists.
-- **Method:**
-  - `int run(const std::string& keyPath);` → 0 on normal exit. Opens IPC via `ftok(keyPath, ...)`, consumes from TRIAGE queue, ~5% send home (releasing waiting-room slots), otherwise assigns color (10/35/50 red/yellow/green), picks specialist, updates shared stats under semaphore, forwards to SPECIALISTS queue with mtype = base + specialistIdx for direct routing, logs patient id/color/spec, exits on SIGUSR2.
-
-### `Specialist` (`roles/specialist.hpp/.cpp`)
-- **Purpose:** Handles one specialty; reacts to `SIGUSR1` (temporary leave) and `SIGUSR2` (shutdown).
-- **Method:**
-  - `int run(const std::string& keyPath, SpecialistType type);` → 0 on normal exit. Opens IPC via `ftok(keyPath, ...)`, filters messages for its `type` from SPECIALISTS queue, simulates exam, updates outcomes (~85/14.5/0.5%) under shared-state semaphore, logs events, pauses on SIGUSR1 (simulated delay), exits on SIGUSR2. Director currently spawns all six types via exec args.
-
-**Role Example Launch (conceptual):**
-```cpp
-pid_t pid = fork();
-if (pid == 0) {
-    Specialist s;
-    return s.run();
-} else if (pid > 0) {
-    // parent continues
-}
-```
-
-## Models
-
-- `model/types.hpp`: enums for triage colors, specialist types, event types, and roles.
-- `model/patient.hpp`: `PatientInfo` structure describing patient attributes.
-- `model/events.hpp`: `EventMessage` for IPC; `LogMessage` for logger queue.
-- `model/shared_state.hpp`: `SharedState` shared-memory layout (queue lengths, counts, PIDs).
-- `model/config.hpp`: runtime configuration (limits, time scaling, seed, etc.).
-
-These model structs are plain data; no functions. Usage is via the IPC wrappers and role logic described above.
+All IPC operations use minimal permissions (0600) and validate return codes with `errno` logging. Cleanup paths remove queues/semaphores/shared memory after the run.

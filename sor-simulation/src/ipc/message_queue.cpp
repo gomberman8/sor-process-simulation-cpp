@@ -11,6 +11,7 @@ MessageQueue::MessageQueue() : mqId(-1) {}
 
 MessageQueue::~MessageQueue() = default;
 
+// Create/open a SysV message queue and cache its id.
 bool MessageQueue::create(key_t key, int permissions) {
     mqId = msgget(key, IPC_CREAT | permissions);
     if (mqId == -1) {
@@ -20,6 +21,7 @@ bool MessageQueue::create(key_t key, int permissions) {
     return true;
 }
 
+// Send a message: writes mtype header then dispatches payload.
 bool MessageQueue::send(const void* msg, size_t size, long type) {
     if (mqId == -1) {
         logErrno("MessageQueue::send called before create");
@@ -42,6 +44,7 @@ bool MessageQueue::send(const void* msg, size_t size, long type) {
     return true;
 }
 
+// Receive a message with optional msgtyp filtering and flags.
 bool MessageQueue::receive(void* buffer, size_t size, long type, int flags) {
     if (mqId == -1) {
         logErrno("MessageQueue::receive called before create");
@@ -64,6 +67,7 @@ int MessageQueue::id() const {
     return mqId;
 }
 
+// Remove the queue (IPC_RMID).
 bool MessageQueue::destroy() {
     if (mqId == -1) {
         logErrno("MessageQueue::destroy called before create");
@@ -76,6 +80,7 @@ bool MessageQueue::destroy() {
     return true;
 }
 
+// Attach to an existing queue without creating it.
 bool MessageQueue::open(key_t key) {
     mqId = msgget(key, 0);
     if (mqId == -1) {

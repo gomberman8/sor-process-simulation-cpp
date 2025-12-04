@@ -21,6 +21,7 @@ void dispatch(int signum) {
 namespace Signals {
 
 bool setHandler(int signum, Handler handler) {
+    // Install a std::function-backed handler via sigaction.
     struct sigaction sa {};
     sa.sa_handler = dispatch;
     sigemptyset(&sa.sa_mask);
@@ -35,6 +36,7 @@ bool setHandler(int signum, Handler handler) {
 }
 
 void ignore(int signum) {
+    // Install SIG_IGN for the given signal.
     struct sigaction sa {};
     sa.sa_handler = SIG_IGN;
     sigemptyset(&sa.sa_mask);

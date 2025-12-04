@@ -54,6 +54,12 @@ int currentRealMinutes(const SharedState* state) {
 }
 } // namespace
 
+/**
+ * @brief Generate patients at the configured pace, using shared IPC for metrics/logging and reaping/forking children until SIGUSR2.
+ * @param keyPath path used for ftok keys (shared with director).
+ * @param cfg configuration for time scaling, thresholds, and RNG seed.
+ * @return 0 on normal stop, non-zero on error.
+ */
 int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
     // Ignore SIGINT so director controls shutdown via SIGUSR2.
     struct sigaction saIgnore {};

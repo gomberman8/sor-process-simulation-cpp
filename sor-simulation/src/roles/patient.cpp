@@ -62,6 +62,16 @@ void* childThreadMain(void* arg) {
 }
 } // namespace
 
+/**
+ * @brief Patient lifecycle: attach to shared IPC, take waiting-room slots, enqueue to registration, and honor SIGUSR2; guardians modeled via a helper thread.
+ * @param keyPath path used for ftok keys.
+ * @param patientId logical id.
+ * @param age age in years.
+ * @param isVip VIP flag.
+ * @param hasGuardian child with guardian flag.
+ * @param personsCount 1 or 2 (with guardian).
+ * @return 0 on completion or orderly shutdown.
+ */
 int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip, bool hasGuardian, int personsCount) {
     // Ignore SIGINT so only SIGUSR2 controls shutdown.
     struct sigaction saIgnore {};

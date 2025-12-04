@@ -74,6 +74,11 @@ int currentSimMinutes(const SharedState* state) {
 }
 } // namespace
 
+/**
+ * @brief Classify patients, optionally send home, and route to specialists; maintains shared counters and exits on SIGUSR2.
+ * @param keyPath path used for ftok keys.
+ * @return 0 on normal exit.
+ */
 int Triage::run(const std::string& keyPath) {
     // Ignore SIGINT so only SIGUSR2 controls shutdown.
     struct sigaction saIgnore {};

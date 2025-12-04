@@ -21,6 +21,13 @@
 #include "visualization/visualizer.hpp"
 
 namespace {
+/**
+ * @brief Load key/value pairs from config file with defaults and validation.
+ * @param path path to config file.
+ * @param cfg destination structure to fill.
+ * @param err error message on failure.
+ * @return true if parsed and validated, false otherwise.
+ */
 bool parseConfigFile(const std::string& path, Config& cfg, std::string& err) {
     std::ifstream in(path);
     if (!in) {
@@ -85,6 +92,7 @@ bool parseConfigFile(const std::string& path, Config& cfg, std::string& err) {
 }
 } // namespace
 
+// Entry point dispatches run modes (simulator, visualizer, logger, or individual roles) and shares IPC via ftok keys from argv[0].
 int main(int argc, char* argv[]) {
     if (argc >= 3 && std::string(argv[1]) == "visualize") {
         int intervalMs = 200;

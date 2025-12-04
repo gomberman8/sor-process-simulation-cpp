@@ -72,6 +72,12 @@ int currentSimMinutes(const SharedState* state) {
 }
 } // namespace
 
+/**
+ * @brief Specialist loop: open its queue, handle SIGUSR1 pause/SIGUSR2 stop, consume prioritized patients, update outcomes, and free waiting-room capacity.
+ * @param keyPath path used for ftok keys.
+ * @param type specialist enum value (0..5).
+ * @return 0 on normal exit.
+ */
 int Specialist::run(const std::string& keyPath, SpecialistType type) {
     // Ignore SIGINT so only SIGUSR2/SIGUSR1 manage lifecycle.
     struct sigaction saIgnore {};

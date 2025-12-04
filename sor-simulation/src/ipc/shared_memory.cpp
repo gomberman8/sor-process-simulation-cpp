@@ -11,6 +11,7 @@ SharedMemory::SharedMemory() : shmId(-1), shmSize(0) {}
 
 SharedMemory::~SharedMemory() = default;
 
+// Allocate a shared memory segment and remember its size/id.
 bool SharedMemory::create(key_t key, size_t size, int permissions) {
     shmSize = size;
     shmId = shmget(key, size, IPC_CREAT | permissions);
@@ -21,6 +22,7 @@ bool SharedMemory::create(key_t key, size_t size, int permissions) {
     return true;
 }
 
+// Attach the shared segment into this process.
 void* SharedMemory::attach() {
     if (shmId == -1) {
         logErrno("SharedMemory::attach called before create");
@@ -34,6 +36,7 @@ void* SharedMemory::attach() {
     return addr;
 }
 
+// Detach a previously attached address.
 bool SharedMemory::detach(const void* addr) {
     if (addr == nullptr) {
         logErrno("SharedMemory::detach null address");
@@ -46,6 +49,7 @@ bool SharedMemory::detach(const void* addr) {
     return true;
 }
 
+// Remove the shared memory segment (IPC_RMID).
 bool SharedMemory::destroy() {
     if (shmId == -1) {
         logErrno("SharedMemory::destroy called before create");
@@ -58,6 +62,7 @@ bool SharedMemory::destroy() {
     return true;
 }
 
+// Open an existing segment by key without creating a new one.
 bool SharedMemory::open(key_t key) {
     shmId = shmget(key, 0, 0);
     if (shmId == -1) {

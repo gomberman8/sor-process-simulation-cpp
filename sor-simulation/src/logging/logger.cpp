@@ -127,6 +127,12 @@ std::string roleLabel(int roleInt) {
 }
 } // namespace
 
+/**
+ * @brief Dedicated logger process: open/create the output file, block on msgrcv() for LogMessage, stop on END marker.
+ * @param queueId log queue id.
+ * @param path destination log path.
+ * @return 0 on clean shutdown, non-zero on error.
+ */
 int runLogger(int queueId, const std::string& path) {
     // Ignore SIGINT so logger survives Ctrl+C until it receives END.
     struct sigaction saIgnore {};
@@ -176,6 +182,14 @@ void setLogMetricsContext(const LogMetricsContext& context) {
     g_metricsContextSet = true;
 }
 
+/**
+ * @brief Package a LogMessage, optionally include live metrics, and send via msgsnd().
+ * @param queueId log queue id.
+ * @param role sender role.
+ * @param simTime simulated minute.
+ * @param text payload text.
+ * @return true on success, false on failure.
+ */
 bool logEvent(int queueId, Role role, int simTime, const std::string& text) {
     if (queueId == -1) {
         logErrno("logEvent invalid queue id");

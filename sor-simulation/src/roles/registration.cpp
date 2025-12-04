@@ -43,6 +43,12 @@ int currentSimMinutes(const SharedState* state) {
 }
 } // namespace
 
+/**
+ * @brief Consume arrivals from the registration queue, adjust shared counters, forward to triage, and exit on SIGUSR2.
+ * @param keyPath path used for ftok keys.
+ * @param isSecond true if this instance is the auxiliary window.
+ * @return 0 on normal exit.
+ */
 int Registration::run(const std::string& keyPath, bool isSecond) {
     // Ignore SIGINT so only SIGUSR2 triggers shutdown.
     struct sigaction saIgnore {};
