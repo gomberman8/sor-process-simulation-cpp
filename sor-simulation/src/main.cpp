@@ -3,6 +3,12 @@
 #include <cstdlib>
 #include <iostream>
 #include <fstream>
+#include <ctime>
+#include <cstdio>
+#include <csignal>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <vector>
 
 #include "director.hpp"
 #include "logging/logger.hpp"
@@ -12,6 +18,7 @@
 #include "roles/specialist.hpp"
 #include "roles/patient_generator.hpp"
 #include "roles/patient.hpp"
+#include "visualization/visualizer.hpp"
 
 namespace {
 bool parseConfigFile(const std::string& path, Config& cfg, std::string& err) {
@@ -26,6 +33,7 @@ bool parseConfigFile(const std::string& path, Config& cfg, std::string& err) {
     cfg.timeScaleMsPerSimMinute = 20;
     cfg.simulationDurationMinutes = 0;
     cfg.randomSeed = 12345;
+    cfg.visualizerRenderIntervalMs = 200;
 
     auto trim = [](const std::string& s) {
         size_t b = s.find_first_not_of(" \t\r\n");
@@ -48,6 +56,7 @@ bool parseConfigFile(const std::string& path, Config& cfg, std::string& err) {
             else if (key == "simulationDurationMinutes") cfg.simulationDurationMinutes = std::stoi(val);
             else if (key == "timeScaleMsPerSimMinute") cfg.timeScaleMsPerSimMinute = std::stoi(val);
             else if (key == "randomSeed") cfg.randomSeed = static_cast<unsigned int>(std::stoul(val));
+            else if (key == "visualizerRenderIntervalMs") cfg.visualizerRenderIntervalMs = std::stoi(val);
         } catch (const std::exception&) {
             err = "Invalid value for key: " + key;
             return false;
@@ -68,11 +77,27 @@ bool parseConfigFile(const std::string& path, Config& cfg, std::string& err) {
         err = "timeScaleMsPerSimMinute must be > 0";
         return false;
     }
+    if (cfg.visualizerRenderIntervalMs <= 0) {
+        err = "visualizerRenderIntervalMs must be > 0";
+        return false;
+    }
     return true;
 }
 } // namespace
 
 int main(int argc, char* argv[]) {
+    if (argc >= 3 && std::string(argv[1]) == "visualize") {
+        int intervalMs = 200;
+        try {
+            if (argc >= 4) {
+                intervalMs = std::stoi(argv[3]);
+            }
+        } catch (const std::exception&) {
+            intervalMs = 200;
+        }
+        return runVisualizer(argv[2], intervalMs);
+    }
+
     if (argc >= 2 && std::string(argv[1]) == "logger") {
         if (argc < 4) {
             std::cerr << "Logger mode usage: " << argv[0] << " logger <queueId> <logPath>" << std::endl;
@@ -133,6 +158,7 @@ int main(int argc, char* argv[]) {
         cfg.simulationDurationMinutes = std::stoi(argv[5]);
         cfg.timeScaleMsPerSimMinute = std::stoi(argv[6]);
         cfg.randomSeed = static_cast<unsigned int>(std::stoul(argv[7]));
+        cfg.visualizerRenderIntervalMs = 200;
         PatientGenerator gen;
         return gen.run(argv[2], cfg);
     }
@@ -171,6 +197,7 @@ int main(int argc, char* argv[]) {
             cfg.simulationDurationMinutes = std::stoi(argv[3]);
             cfg.timeScaleMsPerSimMinute = std::stoi(argv[4]);
             cfg.randomSeed = static_cast<unsigned int>(std::stoul(argv[5]));
+            cfg.visualizerRenderIntervalMs = 200;
             // basic validation
             if (cfg.N_waitingRoom <= 0) {
                 err = "N_waitingRoom must be > 0";
@@ -217,12 +244,49 @@ int main(int argc, char* argv[]) {
                  "Run on the Debian lab target for correct behavior." << std::endl;
 #endif
 
+    // Compute log path upfront so the visualizer can attach immediately.
+    std::string logPath = "sor_run_" + std::to_string(static_cast<long long>(std::time(nullptr))) + ".log";
+    pid_t vizPid = -1;
+
+    vizPid = fork();
+    if (vizPid == -1) {
+        std::perror("Failed to fork visualizer");
+    } else if (vizPid == 0) {
+        std::vector<char*> args;
+        args.push_back(const_cast<char*>(argv[0]));
+        args.push_back(const_cast<char*>("visualize"));
+        args.push_back(const_cast<char*>(logPath.c_str()));
+        std::string intervalStr = std::to_string(cfg.visualizerRenderIntervalMs);
+        args.push_back(const_cast<char*>(intervalStr.c_str()));
+        args.push_back(nullptr);
+        execv(argv[0], args.data());
+        std::perror("Failed to exec visualizer");
+        _exit(1);
+    }
+
     Director director;
-    int rc = director.run(argv[0], cfg);
+    int rc = director.run(argv[0], cfg, &logPath);
     if (rc == 0) {
         std::cout << "SOR simulation WIP – director init and logger handshake OK" << std::endl;
+        const std::string& summaryPath = director.lastSummaryPath();
+        if (!summaryPath.empty()) {
+            std::ifstream in(summaryPath);
+            if (in) {
+                std::cout << "\n=== " << summaryPath << " ===\n";
+                std::cout << in.rdbuf() << std::flush;
+            } else {
+                std::cerr << "Failed to open summary file: " << summaryPath << std::endl;
+            }
+        } else {
+            std::cerr << "No summary file (sor_summary_*.txt) found to display" << std::endl;
+        }
     } else {
         std::cerr << "SOR simulation initialization failed" << std::endl;
+    }
+
+    if (vizPid > 0) {
+        kill(vizPid, SIGTERM);
+        waitpid(vizPid, nullptr, 0);
     }
     return rc;
 }

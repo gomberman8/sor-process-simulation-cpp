@@ -200,14 +200,30 @@ bool logEvent(int queueId, Role role, int simTime, const std::string& text) {
     }
     std::strncpy(msg.text, finalText.c_str(), sizeof(msg.text) - 1);
     size_t payloadSize = sizeof(LogMessage) - sizeof(long);
-    // Use IPC_NOWAIT to avoid blocking the simulation when the log queue is full.
-    // On EAGAIN we simply drop the log entry to keep processing moving.
-    if (msgsnd(queueId, &msg, payloadSize, IPC_NOWAIT) == -1) {
+    // Retry briefly on EAGAIN to avoid dropping lifecycle logs that drive the visualizer.
+    const int kMaxRetry = 20; // ~20ms total with 1ms sleeps
+    int attempts = 0;
+    while (attempts < kMaxRetry) {
+        if (msgsnd(queueId, &msg, payloadSize, IPC_NOWAIT) == 0) {
+            return true;
+        }
         if (errno == EAGAIN) {
-            return false;
+            ++attempts;
+            usleep(1000);
+            continue;
+        }
+        if (errno == EINTR) {
+            continue;
         }
         if (errno != EIDRM && errno != EINVAL) {
             logErrno("logEvent msgsnd failed");
+        }
+        return false;
+    }
+    // Final blocking attempt; if it fails we drop but at least tried to flush.
+    if (msgsnd(queueId, &msg, payloadSize, 0) == -1) {
+        if (errno != EIDRM && errno != EINVAL) {
+            logErrno("logEvent msgsnd failed (blocking)");
         }
         return false;
     }

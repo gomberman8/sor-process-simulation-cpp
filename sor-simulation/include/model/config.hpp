@@ -8,4 +8,5 @@ struct Config {
     int timeScaleMsPerSimMinute;
     int simulationDurationMinutes;
     unsigned int randomSeed;
+    int visualizerRenderIntervalMs;
 };

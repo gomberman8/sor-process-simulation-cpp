@@ -60,4 +60,12 @@ Patient generator/patient can be invoked directly:
 Director currently spawns patient generator and all specialists via exec for the demo lifecycle.
 Director currently spawns one instance for each specialist type via exec.
 
+### Live log visualizer
+Tail the logger output to see patient flow in a TUI-like board (no extra deps):
+```bash
+./sor_sim visualize sor_run_<timestamp>.log
+```
+The view refreshes whenever the log grows and shows waiting room load, entrance queue, specialist queues, and the last actions. Stop with `Ctrl+C`.
+When you run `./sor_sim` normally, a visualizer is auto-spawned against the newest log path created for that run.
+
 **Note (environment):** System V IPC (msg/sem/shm) is required and may be blocked on macOS; run and test on the target Debian lab machine for correct behavior.

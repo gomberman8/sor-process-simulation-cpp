@@ -477,13 +477,14 @@ void destroyIpc(const IpcIds& ids, SharedState* attachedState) {
 }
 } // namespace
 
-int Director::run(const std::string& selfPath, const Config& config) {
+int Director::run(const std::string& selfPath, const Config& config, const std::string* logPathOverride) {
     IpcIds ids;
     ids.specialistsQueue.fill(-1);
     SharedState* shared = nullptr;
     bool ok = true;
     Semaphore stateSemGuard;
     struct msqid_ds regStats{};
+    lastSummaryPath_.clear();
 
     if (!createQueues(selfPath, ids)) {
         ok = false;
@@ -495,7 +496,9 @@ int Director::run(const std::string& selfPath, const Config& config) {
         ok = false;
     }
 
-    std::string logPath = "sor_run_" + std::to_string(static_cast<long long>(std::time(nullptr))) + ".log";
+    std::string logPath = logPathOverride ? *logPathOverride
+                                          : "sor_run_" + std::to_string(static_cast<long long>(std::time(nullptr))) + ".log";
+    lastLogPath_ = logPath;
 
     pid_t loggerPid = -1;
     if (ok) {
@@ -825,6 +828,7 @@ int Director::run(const std::string& selfPath, const Config& config) {
         SummaryPayload payload = buildPayload(shared, simulatedSeconds, reg2History, specialistPidMap);
         if (writeSummary(payload, summaryPath)) {
             logEvent(ids.logQueue, Role::Director, stopSimTime, "Summary saved: " + summaryPath);
+            lastSummaryPath_ = summaryPath;
         }
     }
     // send termination marker for logger after children have had a chance to log shutdown

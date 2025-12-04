@@ -13,6 +13,11 @@ set(SRC_FILES
     src/roles/registration.cpp
     src/roles/triage.cpp
     src/roles/specialist.cpp
+    src/visualization/visualizer.cpp
+    src/visualization/log_parser.cpp
+    src/visualization/state.cpp
+    src/visualization/render_utils.cpp
+    src/visualization/renderer.cpp
     src/ipc/message_queue.cpp
     src/ipc/shared_memory.cpp
     src/ipc/semaphore.cpp
@@ -26,4 +31,3 @@ add_executable(sor_sim ${SRC_FILES})
 
 target_link_libraries(sor_sim PRIVATE pthread)
 target_include_directories(sor_sim PRIVATE include)
-
