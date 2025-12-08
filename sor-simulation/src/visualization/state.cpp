@@ -188,6 +188,7 @@ void applyLogEntry(const LogEntry& entry, VisualizationState& state) {
         if (entry.waitingCapacity > 0) {
             state.waitingCapacity = entry.waitingCapacity;
         }
+        state.waitSem = entry.waitSem;
         state.regQueue = entry.regQueue;
         state.triageQueue = entry.triageQueue;
         state.specialistsQueue = entry.specialistsQueue;

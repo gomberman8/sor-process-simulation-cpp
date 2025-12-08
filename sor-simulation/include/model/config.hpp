@@ -9,4 +9,8 @@ struct Config {
     int simulationDurationMinutes;
     unsigned int randomSeed;
     int visualizerRenderIntervalMs;
+    int registrationServiceMs;
+    int triageServiceMs;
+    int specialistExamMinMs;
+    int specialistExamMaxMs;
 };

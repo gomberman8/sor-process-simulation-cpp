@@ -28,35 +28,36 @@ bool Semaphore::create(key_t key, int initialValue, int permissions) {
 // P-operation (semop -1) to acquire.
 bool Semaphore::wait() {
     if (semId == -1) {
-        logErrno("Semaphore::wait called before create");
         return false;
     }
+    // Plain wait; no SEM_UNDO because waiting and releasing happen in different processes.
     struct sembuf op {0, -1, 0};
-    if (semop(semId, &op, 1) == -1) {
-        if (errno == EIDRM || errno == EINVAL || errno == EINTR) {
-            return false;
+    while (true) {
+        if (semop(semId, &op, 1) == 0) {
+            return true;
         }
-        logErrno("semop wait failed");
+        if (errno == EINTR) {
+            continue; // retry on interrupt to avoid losing capacity
+        }
         return false;
     }
-    return true;
 }
 
 // V-operation (semop +1) to release.
 bool Semaphore::post() {
     if (semId == -1) {
-        logErrno("Semaphore::post called before create");
         return false;
     }
     struct sembuf op {0, 1, 0};
-    if (semop(semId, &op, 1) == -1) {
-        if (errno == EIDRM || errno == EINVAL || errno == EINTR) {
-            return false;
+    while (true) {
+        if (semop(semId, &op, 1) == 0) {
+            return true;
         }
-        logErrno("semop post failed");
+        if (errno == EINTR) {
+            continue; // retry on interrupt to avoid leaking slots
+        }
         return false;
     }
-    return true;
 }
 
 // Remove the semaphore set (IPC_RMID).

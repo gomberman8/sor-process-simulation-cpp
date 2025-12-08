@@ -79,6 +79,11 @@ Config keys (`config.cfg`):
 ./sor_sim patient <keyPath> <id> <age> <isVip> <hasGuardian> <personsCount>
 ```
 
+## Optional reconcile for waiting-room semaphore
+- Env flag: `SORSIM_RECONCILE_WAITSEM=1 ./sor_sim --config ../config.cfg`
+- What it does: Director monitors the System V semaphore that guards the waiting-room capacity. In long runs I observed rare drift where the kernel semaphore value fell to 0 while the shared counters (acquired/released/inside) were still balanced. With the flag on, whenever Director sees “missing” tokens (expected free slots > current sem value), it resets the semaphore to the expected free count and logs `ERROR MON RECONCILE` with semctl diagnostics. With the flag off (default), nothing is auto-corrected and the raw semaphore value is used.
+- Why this exists: System V semaphores do not pair waits/posts across processes and do not auto-return tokens if a process dies after a successful wait. Despite per-call error checks, I saw occasional kernel-side value loss under heavy contention (hundreds of blocked waiters). The reconcile is a guardrail to keep the simulation responsive for demos while still using the required SysV primitives. It is off by default to preserve the original assignment semantics; enabling it is a conscious opt-in when investigating or demonstrating long runs.
+
 ## Assignment highlights (restored)
 - Multi-process pipeline using `fork()` + `exec()` for every role (director, logger, registration 1/2, triage, six specialists, patient generator, visualizer).
 - System V IPC mix: message queues for registration/triage/specialists/logging; shared memory for global counters; semaphores for waiting-room capacity and shared-state protection.

@@ -41,6 +41,7 @@ struct VisualizationState {
     std::map<int, PatientView> patients;
     int waitingCurrent{0};
     int waitingCapacity{0};
+    int waitSem{0};
     int regQueue{0};
     int triageQueue{0};
     int specialistsQueue{0};

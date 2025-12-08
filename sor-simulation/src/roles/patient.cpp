@@ -18,6 +18,7 @@
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <ctime>
+#include <sys/sem.h>
 #include <unistd.h>
 
 namespace {
@@ -39,6 +40,13 @@ int currentSimMinutes(const SharedState* state) {
     long long delta = now - state->simStartMonotonicMs;
     if (delta < 0) delta = 0;
     return static_cast<int>(delta / state->timeScaleMsPerSimMinute);
+}
+
+int semaphoreValue(int semId) {
+    if (semId < 0) return 0;
+    int val = semctl(semId, 0, GETVAL);
+    if (val == -1) return 0;
+    return val;
 }
 
 struct ChildArgs {
@@ -151,18 +159,58 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
              " persons=" + std::to_string(personsCount));
 
     // Acquire waiting room slots
+    int acquired = 0;
     for (int i = 0; i < personsCount; ++i) {
         if (!waitSem.wait()) {
+            int simTime = currentSimMinutes(statePtr);
+            logEvent(logQueue.id(), Role::Patient, simTime,
+                     "ERROR waitSem wait failed id=" + std::to_string(patientId) +
+                     " persons=" + std::to_string(personsCount) +
+                     " acquired=" + std::to_string(acquired));
+            // Roll back already acquired slots to avoid leaking capacity.
+            for (int j = 0; j < acquired; ++j) {
+                if (!waitSem.post()) {
+                }
+            }
+            logEvent(logQueue.id(), Role::Patient, simTime,
+                     "ERROR PATIENT ROLLBACK released=" + std::to_string(acquired));
             shm.detach(statePtr);
             return 1;
         }
+        acquired += 1;
+    }
+
+    // If stop was requested after acquiring slots, roll back.
+    if (stopFlag.load()) {
+        for (int i = 0; i < personsCount; ++i) {
+            waitSem.post();
+        }
+        if (childStarted) {
+            childStop.store(true);
+            pthread_join(childThread, nullptr);
+            delete childArgs;
+        }
+        shm.detach(statePtr);
+        return 0;
     }
 
     // Update shared state: inside count and queue len
-    stateSem.wait();
+    if (!stateSem.wait()) {
+        for (int i = 0; i < personsCount; ++i) {
+            waitSem.post();
+        }
+        if (childStarted) {
+            childStop.store(true);
+            pthread_join(childThread, nullptr);
+            delete childArgs;
+        }
+        shm.detach(statePtr);
+        return 1;
+    }
     statePtr->currentInWaitingRoom += personsCount;
     statePtr->queueRegistrationLen += 1;
     statePtr->totalPatients += 1;
+    int insideAfter = statePtr->currentInWaitingRoom;
     stateSem.post();
 
     simTime = currentSimMinutes(statePtr);
@@ -186,6 +234,30 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
     // Non-blocking send with retry to avoid deadlock if registration queue temporarily full.
     size_t payloadSize = sizeof(EventMessage) - sizeof(long);
     while (true) {
+        if (stopFlag.load()) {
+            // Release slots and exit quietly.
+            for (int i = 0; i < personsCount; ++i) {
+                waitSem.post();
+            }
+            stateSem.wait();
+            if (statePtr->currentInWaitingRoom >= personsCount) {
+                statePtr->currentInWaitingRoom -= personsCount;
+            }
+            if (statePtr->queueRegistrationLen > 0) {
+                statePtr->queueRegistrationLen -= 1;
+            }
+            if (statePtr->totalPatients > 0) {
+                statePtr->totalPatients -= 1;
+            }
+            stateSem.post();
+            if (childStarted) {
+                childStop.store(true);
+                pthread_join(childThread, nullptr);
+                delete childArgs;
+            }
+            shm.detach(statePtr);
+            return 0;
+        }
         if (msgsnd(regQueue.id(), &ev, payloadSize, IPC_NOWAIT) == 0) {
             break;
         }
@@ -194,7 +266,28 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
             continue;
         }
         logErrno("Patient send to registration failed");
-        break;
+        // Release slots and counters on failure to avoid leaking capacity.
+        for (int i = 0; i < personsCount; ++i) {
+            waitSem.post();
+        }
+        stateSem.wait();
+        if (statePtr->currentInWaitingRoom >= personsCount) {
+            statePtr->currentInWaitingRoom -= personsCount;
+        }
+        if (statePtr->queueRegistrationLen > 0) {
+            statePtr->queueRegistrationLen -= 1;
+        }
+        if (statePtr->totalPatients > 0) {
+            statePtr->totalPatients -= 1;
+        }
+        stateSem.post();
+        if (childStarted) {
+            childStop.store(true);
+            pthread_join(childThread, nullptr);
+            delete childArgs;
+        }
+        shm.detach(statePtr);
+        return 1;
     }
 
     // Patient process ends; waiting room slots will be released once registration forwards the patient.

@@ -31,9 +31,12 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <cstdlib>
 #include <array>
 
 namespace {
+constexpr int kDefaultTimeScaleMsPerSimMinute = 20;
+
 struct IpcIds {
     int logQueue{-1};
     int regQueue{-1};
@@ -545,6 +548,23 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
     long long simStartMs = monotonicMs();
     auto simNow = [&]() { return simMinutesFrom(simStartMs, config.timeScaleMsPerSimMinute); };
     auto realNow = [&]() { return realMinutesFrom(simStartMs); };
+    auto scaleAllowZero = [&](int baseMs) {
+        if (baseMs <= 0) return 0;
+        long long scaled = static_cast<long long>(baseMs) * config.timeScaleMsPerSimMinute /
+                           kDefaultTimeScaleMsPerSimMinute;
+        if (scaled <= 0) scaled = 1;
+        return static_cast<int>(scaled);
+    };
+    auto scaleAtLeastOne = [&](int baseMs) {
+        int v = scaleAllowZero(baseMs);
+        return v <= 0 ? 1 : v;
+    };
+    int scaledRegMs = scaleAllowZero(config.registrationServiceMs);
+    int scaledTriageMs = scaleAllowZero(config.triageServiceMs);
+    int scaledSpecMin = scaleAtLeastOne(config.specialistExamMinMs);
+    int scaledSpecMax = scaleAtLeastOne(config.specialistExamMaxMs);
+    if (scaledSpecMax < scaledSpecMin) scaledSpecMax = scaledSpecMin;
+
     if (ok && shared) {
         shared->currentInWaitingRoom = 0;
         shared->waitingRoomCapacity = config.N_waitingRoom;
@@ -555,6 +575,10 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
         shared->simStartMonotonicMs = simStartMs;
         shared->totalPatients = 0;
         shared->triageRed = shared->triageYellow = shared->triageGreen = shared->triageSentHome = 0;
+        shared->registrationServiceMs = scaledRegMs;
+        shared->triageServiceMs = scaledTriageMs;
+        shared->specialistExamMinMs = scaledSpecMin;
+        shared->specialistExamMaxMs = scaledSpecMax;
         shared->outcomeHome = shared->outcomeWard = shared->outcomeOther = 0;
         shared->directorPid = getpid();
         shared->registration1Pid = shared->registration2Pid = shared->triagePid = 0;
@@ -571,6 +595,11 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
                               ids.semWaitingRoom, ids.semSharedState});
     }
 
+    pid_t reg1Pid = -1;
+    pid_t reg2Pid = -1;
+    pid_t triagePid = -1;
+    pid_t generatorPid = -1;
+
     if (ok) {
         int simTime = simNow();
         logEvent(ids.logQueue, Role::Director, simTime, "Director: IPC initialized, logger spawned: " + logPath);
@@ -578,11 +607,18 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
                  "Simulation config N=" + std::to_string(config.N_waitingRoom) +
                  " K=" + std::to_string(config.K_registrationThreshold) +
                  " simMinutes=" + std::to_string(config.simulationDurationMinutes) +
-                 " msPerMinute=" + std::to_string(config.timeScaleMsPerSimMinute));
+                 " msPerMinute=" + std::to_string(config.timeScaleMsPerSimMinute) +
+                 " regMs=" + std::to_string(scaledRegMs) +
+                 " triageMs=" + std::to_string(scaledTriageMs) +
+                 " specMinMax=" + std::to_string(scaledSpecMin) +
+                 "/" + std::to_string(scaledSpecMax));
+        logEvent(ids.logQueue, Role::Director, simTime,
+                 "Director PIDs: reg1=" + std::to_string(reg1Pid) +
+                 " reg2=" + std::to_string(reg2Pid) +
+                 " triage=" + std::to_string(triagePid) +
+                 " gen=" + std::to_string(generatorPid));
     }
 
-    pid_t reg1Pid = -1;
-    pid_t reg2Pid = -1;
     if (ok) {
         reg1Pid = fork();
         if (reg1Pid == -1) {
@@ -604,7 +640,6 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
             logEvent(ids.logQueue, Role::Director, simNow(), "Registration1 spawned");
         }
     }
-    pid_t triagePid = -1;
     if (ok) {
         triagePid = fork();
         if (triagePid == -1) {
@@ -627,7 +662,6 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
         }
     }
 
-    pid_t generatorPid = -1;
     if (ok) {
         generatorPid = fork();
         if (generatorPid == -1) {
@@ -718,6 +752,7 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
     int sigusr1CooldownMs = 1000; // attempt SIGUSR1 roughly every second if specialists exist
     int elapsedSinceUsr1 = 0;
     bool durationStopIssued = false;
+    long long lastMonitorLogMs = monotonicMs();
     while (!stopRequested.load()) {
         usleep(static_cast<useconds_t>(chunkMs * 1000));
         int simTime = simNow();
@@ -783,6 +818,80 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
                 shared->registration2Pid = 0;
                 stateSemGuard.post();
             }
+        }
+        // Periodic monitor log with ERROR prefix to spot stalls/died processes.
+        long long nowMs = monotonicMs();
+        if (nowMs - lastMonitorLogMs >= 5000 && ids.semWaitingRoom != -1) {
+            lastMonitorLogMs = nowMs;
+            int wsemVal = semctl(ids.semWaitingRoom, 0, GETVAL);
+            if (wsemVal < 0) {
+                logErrno("ERROR MONITOR semctl GETVAL failed for waiting room");
+                wsemVal = -1;
+            }
+            int regQLen = 0;
+            if (ids.regQueue != -1 && msgctl(ids.regQueue, IPC_STAT, &regStats) == 0) {
+                regQLen = static_cast<int>(regStats.msg_qnum);
+            }
+            int triQLen = 0;
+            if (ids.triageQueue != -1) {
+                struct msqid_ds triStats {};
+                if (msgctl(ids.triageQueue, IPC_STAT, &triStats) == 0) {
+                    triQLen = static_cast<int>(triStats.msg_qnum);
+                }
+            }
+            int inside = 0;
+            stateSemGuard.wait();
+            if (shared) {
+                inside = shared->currentInWaitingRoom;
+            }
+            stateSemGuard.post();
+            int expectedFree = (shared ? shared->waitingRoomCapacity : 0) - inside;
+            int missing = expectedFree - wsemVal;
+            bool reg1Alive = reg1Pid > 0 && kill(reg1Pid, 0) == 0;
+            bool reg2Alive = reg2Pid > 0 && kill(reg2Pid, 0) == 0;
+            bool triAlive = triagePid > 0 && kill(triagePid, 0) == 0;
+            int semPid = -1;
+            int waiters = -1;
+            int zeroWaiters = -1;
+            struct semid_ds semInfo {};
+            if (ids.semWaitingRoom != -1) {
+                semPid = semctl(ids.semWaitingRoom, 0, GETPID);
+                waiters = semctl(ids.semWaitingRoom, 0, GETNCNT);
+                zeroWaiters = semctl(ids.semWaitingRoom, 0, GETZCNT);
+                semctl(ids.semWaitingRoom, 0, IPC_STAT, &semInfo);
+            }
+
+            // Optional reconcile: if enabled and we detect missing tokens, reset waitSem to expectedFree to keep simulation flowing while we investigate.
+            // This is a debug guardrail for a rare SysV semaphore drift where tokens vanish despite matching acquire/release counts.
+            static bool reconcileEnabled = []() {
+                const char* env = std::getenv("SORSIM_RECONCILE_WAITSEM");
+                return env && std::string(env) == "1";
+            }();
+            if (reconcileEnabled && missing > 0 && ids.semWaitingRoom != -1) {
+                int setRes = semctl(ids.semWaitingRoom, 0, SETVAL, expectedFree);
+                logEvent(ids.logQueue, Role::Director, simTime,
+                         "ERROR MON RECONCILE set waitSem from " + std::to_string(wsemVal) +
+                         " to " + std::to_string(expectedFree) +
+                         " missing=" + std::to_string(missing) +
+                         " pid=" + std::to_string(semPid) +
+                         " n=" + std::to_string(waiters) +
+                         " z=" + std::to_string(zeroWaiters) +
+                         " setRes=" + std::to_string(setRes));
+                // refresh observed value after reconcile for logging below
+                wsemVal = semctl(ids.semWaitingRoom, 0, GETVAL);
+            }
+            logEvent(ids.logQueue, Role::Director, simTime,
+                     "ERROR MON w=" + std::to_string(wsemVal) +
+                     " id=" + std::to_string(ids.semWaitingRoom) +
+                     " miss=" + std::to_string(missing) +
+                     " pid=" + std::to_string(semPid) +
+                     " n=" + std::to_string(waiters) +
+                     " z=" + std::to_string(zeroWaiters) +
+                     " ot=" + std::to_string(static_cast<long long>(semInfo.sem_otime)) +
+                     " r1=" + std::to_string(reg1Alive ? 1 : 0) +
+                     " r2=" + std::to_string(reg2Alive ? 1 : 0) +
+                     " t=" + std::to_string(triAlive ? 1 : 0));
+            // No automatic reconcile here; we want to catch the first drift to find root cause.
         }
         if (!specialistPids.empty() && elapsedSinceUsr1 >= sigusr1CooldownMs) {
             elapsedSinceUsr1 = 0;

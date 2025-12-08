@@ -130,6 +130,12 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
     if (!statePtr) {
         return 1;
     }
+    int examMinMs = statePtr->specialistExamMinMs;
+    int examMaxMs = statePtr->specialistExamMaxMs;
+    if (examMinMs <= 0 || examMaxMs <= 0 || examMaxMs < examMinMs) {
+        examMinMs = 10;
+        examMaxMs = 40;
+    }
 
     int registrationQueueId = -1;
     int triageQueueId = -1;
@@ -178,7 +184,7 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
                  " persons=" + std::to_string(ev.personsCount));
 
         // Simulate exam; slower to allow queues to build (registration2 logic to kick in later).
-        int examMs = rng.uniformInt(10, 40);
+        int examMs = rng.uniformInt(examMinMs, examMaxMs);
         usleep(static_cast<useconds_t>(examMs * 1000));
 
         int outcomeRand = rng.uniformInt(0, 999);

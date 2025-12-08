@@ -41,6 +41,10 @@ bool parseConfigFile(const std::string& path, Config& cfg, std::string& err) {
     cfg.simulationDurationMinutes = 0;
     cfg.randomSeed = 12345;
     cfg.visualizerRenderIntervalMs = 200;
+    cfg.registrationServiceMs = 25;
+    cfg.triageServiceMs = 0;
+    cfg.specialistExamMinMs = 10;
+    cfg.specialistExamMaxMs = 40;
 
     auto trim = [](const std::string& s) {
         size_t b = s.find_first_not_of(" \t\r\n");
@@ -64,6 +68,10 @@ bool parseConfigFile(const std::string& path, Config& cfg, std::string& err) {
             else if (key == "timeScaleMsPerSimMinute") cfg.timeScaleMsPerSimMinute = std::stoi(val);
             else if (key == "randomSeed") cfg.randomSeed = static_cast<unsigned int>(std::stoul(val));
             else if (key == "visualizerRenderIntervalMs") cfg.visualizerRenderIntervalMs = std::stoi(val);
+            else if (key == "registrationServiceMs") cfg.registrationServiceMs = std::stoi(val);
+            else if (key == "triageServiceMs") cfg.triageServiceMs = std::stoi(val);
+            else if (key == "specialistExamMinMs") cfg.specialistExamMinMs = std::stoi(val);
+            else if (key == "specialistExamMaxMs") cfg.specialistExamMaxMs = std::stoi(val);
         } catch (const std::exception&) {
             err = "Invalid value for key: " + key;
             return false;
@@ -86,6 +94,19 @@ bool parseConfigFile(const std::string& path, Config& cfg, std::string& err) {
     }
     if (cfg.visualizerRenderIntervalMs <= 0) {
         err = "visualizerRenderIntervalMs must be > 0";
+        return false;
+    }
+    if (cfg.registrationServiceMs < 0) {
+        err = "registrationServiceMs must be >= 0";
+        return false;
+    }
+    if (cfg.triageServiceMs < 0) {
+        err = "triageServiceMs must be >= 0";
+        return false;
+    }
+    if (cfg.specialistExamMinMs <= 0 || cfg.specialistExamMaxMs <= 0 ||
+        cfg.specialistExamMaxMs < cfg.specialistExamMinMs) {
+        err = "specialistExamMinMs/maxMs must be >0 and max>=min";
         return false;
     }
     return true;
@@ -167,6 +188,10 @@ int main(int argc, char* argv[]) {
         cfg.timeScaleMsPerSimMinute = std::stoi(argv[6]);
         cfg.randomSeed = static_cast<unsigned int>(std::stoul(argv[7]));
         cfg.visualizerRenderIntervalMs = 200;
+        cfg.registrationServiceMs = 25;
+        cfg.triageServiceMs = 0;
+        cfg.specialistExamMinMs = 10;
+        cfg.specialistExamMaxMs = 40;
         PatientGenerator gen;
         return gen.run(argv[2], cfg);
     }
@@ -206,6 +231,10 @@ int main(int argc, char* argv[]) {
             cfg.timeScaleMsPerSimMinute = std::stoi(argv[4]);
             cfg.randomSeed = static_cast<unsigned int>(std::stoul(argv[5]));
             cfg.visualizerRenderIntervalMs = 200;
+            cfg.registrationServiceMs = 25;
+            cfg.triageServiceMs = 0;
+            cfg.specialistExamMinMs = 10;
+            cfg.specialistExamMaxMs = 40;
             // basic validation
             if (cfg.N_waitingRoom <= 0) {
                 err = "N_waitingRoom must be > 0";

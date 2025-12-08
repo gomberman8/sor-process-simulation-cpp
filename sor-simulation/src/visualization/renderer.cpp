@@ -8,6 +8,10 @@
 #include <iostream>
 #include <sstream>
 
+
+//TODO if a doctor is on leave (SIGUSR1), let him be displayed in his section in red (his name should have a red background)
+
+
 void renderTopSection(const VisualizationState& state) {
     const int totalWidth = 118;
     const int colWaiting = 60;
@@ -35,12 +39,34 @@ void renderTopSection(const VisualizationState& state) {
     auto regList = collectPatientsByStage(state, Stage::RegistrationQueue);
     auto triageList = collectPatientsByStage(state, Stage::TriageQueue);
     size_t triageCount = triageList.size();
-    size_t waitCount = waitingList.size() + regList.size();
-    headWait << "WAITING ROOM " << waitCount << "/";
-    headWait << (state.waitingCapacity > 0 ? std::to_string(state.waitingCapacity) : "?");
+
+    auto personCount = [](const PatientView* p) {
+        return p->persons > 0 ? p->persons : 1;
+    };
+    int personsWaiting = 0;
+    for (auto* p : waitingList) personsWaiting += personCount(p);
+    for (auto* p : regList) personsWaiting += personCount(p);
+    int patientsWaiting = static_cast<int>(waitingList.size() + regList.size());
+
+    int capacityPersons = state.waitingCapacity > 0 ? state.waitingCapacity : 0;
+    int usedPersons = personsWaiting;
+    if (capacityPersons > 0 && state.waitSem >= 0) {
+        usedPersons = capacityPersons - state.waitSem;
+    } else if (state.waitingCurrent > 0) {
+        usedPersons = state.waitingCurrent;
+    }
+
+    headWait << "WAITING ROOM ";
+    if (capacityPersons > 0) {
+        headWait << usedPersons << "/" << capacityPersons << " persons";
+    } else {
+        headWait << patientsWaiting;
+    }
+    headWait << " (patients " << patientsWaiting << ")";
     headReg << "TRIAGE QUEUE tQ=" << triageCount;
+    auto entranceList = collectPatientsByStage(state, Stage::OutsideQueue);
     std::stringstream headEnt;
-    headEnt << "ENTRANCE rQ=" << regList.size() << " " << reg2Status;
+    headEnt << "ENTRANCE outQ=" << entranceList.size() << " " << reg2Status;
 
     std::cout << "|" << padded(headWait.str(), colWaiting)
               << "|" << padded(headReg.str(), colTriage)
@@ -50,12 +76,6 @@ void renderTopSection(const VisualizationState& state) {
     waitingCombined.insert(waitingCombined.end(), waitingList.begin(), waitingList.end());
     waitingCombined.insert(waitingCombined.end(), regList.begin(), regList.end());
 
-    trimQueue(waitingCombined, state.waitingCapacity, [](const PatientView* p) {
-        int stagePri = (p->stage == Stage::RegistrationQueue) ? 0 : 1;
-        int order = (p->stage == Stage::RegistrationQueue) ? p->regOrder : p->waitOrder;
-        if (order < 0) order = p->lastSimTime;
-        return std::make_pair(stagePri, order);
-    });
     std::sort(waitingCombined.begin(), waitingCombined.end(), [](const PatientView* a, const PatientView* b) {
         int stagePriA = (a->stage == Stage::RegistrationQueue) ? 0 : 1;
         int stagePriB = (b->stage == Stage::RegistrationQueue) ? 0 : 1;
@@ -67,10 +87,28 @@ void renderTopSection(const VisualizationState& state) {
         return orderA < orderB;
     });
 
+    // Trim by person capacity if known to avoid displaying more than can fit.
+    if (capacityPersons > 0) {
+        std::vector<const PatientView*> trimmed;
+        int remaining = capacityPersons;
+        for (auto* p : waitingCombined) {
+            int need = personCount(p);
+            if (need <= remaining) {
+                trimmed.push_back(p);
+                remaining -= need;
+            } else {
+                break;
+            }
+        }
+        waitingCombined.swap(trimmed);
+    }
+
     std::vector<const PatientView*> triageOrdered = triageList;
-    trimQueue(triageOrdered, state.triageQueue, [](const PatientView* p) {
-        return p->triageOrder < 0 ? p->lastSimTime : p->triageOrder;
-    });
+    if (state.triageQueue > 0) {
+        trimQueue(triageOrdered, state.triageQueue, [](const PatientView* p) {
+            return p->triageOrder < 0 ? p->lastSimTime : p->triageOrder;
+        });
+    }
     std::sort(triageOrdered.begin(), triageOrdered.end(), [](const PatientView* a, const PatientView* b) {
         int oa = a->triageOrder < 0 ? a->lastSimTime : a->triageOrder;
         int ob = b->triageOrder < 0 ? b->lastSimTime : b->triageOrder;
@@ -83,7 +121,6 @@ void renderTopSection(const VisualizationState& state) {
     std::vector<std::string> triageTokens;
     for (auto* p : triageOrdered) triageTokens.push_back(formatPatientLabel(*p, Stage::TriageQueue));
 
-    auto entranceList = collectPatientsByStage(state, Stage::OutsideQueue);
     std::vector<std::string> entranceTokens;
     for (auto* p : entranceList) entranceTokens.push_back(formatPatientLabel(*p, Stage::OutsideQueue));
 
@@ -91,8 +128,18 @@ void renderTopSection(const VisualizationState& state) {
     auto regLines = wrapTokens(triageTokens, static_cast<size_t>(colTriage - 2));
     auto entranceLines = wrapTokens(entranceTokens, static_cast<size_t>(colEntrance - 2));
 
-    size_t rows = std::max({waitingLines.size(), regLines.size(), entranceLines.size()});
     size_t minRows = static_cast<size_t>((state.waitingCapacity + 3) / 4); // assume roughly 4 items per line
+    size_t waitingHeight = waitingLines.size();
+    if (waitingHeight < minRows) waitingHeight = minRows;
+
+    // Cap entrance height to waiting-height; show overflow with ellipsis.
+    size_t entranceCap = waitingHeight > 0 ? waitingHeight : entranceLines.size();
+    if (entranceCap > 0 && entranceLines.size() > entranceCap) {
+        entranceLines.resize(entranceCap);
+        entranceLines.back() = "...";
+    }
+
+    size_t rows = std::max({waitingHeight, regLines.size(), entranceLines.size()});
     if (rows < minRows) rows = minRows;
     for (size_t i = 0; i < rows; ++i) {
         std::string w = i < waitingLines.size() ? waitingLines[i] : "";

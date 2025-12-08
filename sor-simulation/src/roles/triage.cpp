@@ -144,6 +144,8 @@ int Triage::run(const std::string& keyPath) {
     if (!statePtr) {
         return 1;
     }
+    int triageServiceMs = statePtr->triageServiceMs;
+    if (triageServiceMs < 0) triageServiceMs = 0;
 
     int registrationQueueId = -1;
     if (regKey != -1) {
@@ -158,8 +160,10 @@ int Triage::run(const std::string& keyPath) {
 
     while (!stopFlag.load()) {
         EventMessage ev{};
+        long baseType = static_cast<long>(EventType::PatientRegistered);
+        // Negative msgtyp prioritizes lower mtype, so VIP (baseType) is dequeued before normal (baseType+1).
         ssize_t res = msgrcv(triageQueue.id(), &ev, sizeof(EventMessage) - sizeof(long),
-                             0, 0);
+                             -(baseType + 1), 0);
         if (res == -1) {
             if ((errno == EINTR && stopFlag.load()) || errno == EIDRM || errno == EINVAL) {
                 break;
@@ -168,20 +172,16 @@ int Triage::run(const std::string& keyPath) {
             continue;
         }
 
+        if (triageServiceMs > 0) {
+            usleep(static_cast<useconds_t>(triageServiceMs * 1000));
+        }
+
         // 5% send home directly
         int rHome = rng.uniformInt(0, 99);
         stateSem.wait();
         if (rHome < 5) {
             statePtr->triageSentHome += 1;
-            if (statePtr->currentInWaitingRoom >= ev.personsCount) {
-                statePtr->currentInWaitingRoom -= ev.personsCount;
-            } else {
-                statePtr->currentInWaitingRoom = 0;
-            }
             stateSem.post();
-            for (int i = 0; i < ev.personsCount; ++i) {
-                waitSem.post();
-            }
             simTime = currentSimMinutes(statePtr);
             logEvent(logQueue.id(), Role::Triage, simTime,
                      "Patient sent home from triage id=" + std::to_string(ev.patientId));
@@ -196,15 +196,7 @@ int Triage::run(const std::string& keyPath) {
             default: break;
         }
         SpecialistType spec = pickSpecialist(rng);
-        if (statePtr->currentInWaitingRoom >= ev.personsCount) {
-            statePtr->currentInWaitingRoom -= ev.personsCount;
-        } else {
-            statePtr->currentInWaitingRoom = 0;
-        }
         stateSem.post();
-        for (int i = 0; i < ev.personsCount; ++i) {
-            waitSem.post();
-        }
 
         long routedType = static_cast<long>(EventType::PatientToSpecialist) +
                           static_cast<int>(spec) * 10 + colorPriority(color);

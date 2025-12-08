@@ -17,6 +17,12 @@ struct SharedState {
     int triageGreen;
     int triageSentHome;
 
+    // Service times in milliseconds (real time)
+    int registrationServiceMs;
+    int triageServiceMs;
+    int specialistExamMinMs;
+    int specialistExamMaxMs;
+
     int outcomeHome;
     int outcomeWard;
     int outcomeOther;
