@@ -24,14 +24,12 @@
 #include <vector>
 #include <unistd.h>
 #include <signal.h>
-#include <algorithm>
 #include <chrono>
 #include <thread>
 #include <atomic>
 #include <fstream>
 #include <iostream>
 #include <sstream>
-#include <cstdlib>
 #include <array>
 
 namespace {
@@ -247,6 +245,31 @@ struct SpecialistNames {
     }
 };
 
+/**
+ * @brief Forks and execs a child process with provided argv, logging fork/exec errors.
+ * Parent receives the child's pid; child only returns on exec failure (_exit(1)).
+ */
+pid_t forkExec(const std::string& exePath, const std::vector<std::string>& argv,
+               const std::string& forkErrMsg, const std::string& execErrMsg) {
+    pid_t pid = fork();
+    if (pid == -1) {
+        logErrno(forkErrMsg);
+        return -1;
+    }
+    if (pid == 0) {
+        std::vector<char*> args;
+        args.reserve(argv.size() + 1);
+        for (const auto& s : argv) {
+            args.push_back(const_cast<char*>(s.c_str()));
+        }
+        args.push_back(nullptr);
+        execv(exePath.c_str(), args.data());
+        logErrno(execErrMsg);
+        _exit(1);
+    }
+    return pid;
+}
+
 struct SummaryPayload {
     int totalPatients{0};
     int waitingRoomCapacity{0};
@@ -293,12 +316,6 @@ SummaryPayload buildPayload(const SharedState* state, long long simulatedSeconds
     payload.reg2History = reg2History;
     payload.specialistPids = specialistPids;
     return payload;
-}
-
-std::string summaryBaseFromPath(const std::string& path) {
-    size_t pos = path.rfind('.');
-    if (pos == std::string::npos) return path;
-    return path.substr(0, pos);
 }
 
 std::string joinHistory(const std::vector<pid_t>& values) {
@@ -350,93 +367,13 @@ bool writeSummaryText(const SummaryPayload& payload, std::ofstream& out) {
     return true;
 }
 
-bool writeSummaryJson(const SummaryPayload& payload, const std::string& path) {
-    std::ofstream out(path, std::ios::out | std::ios::trunc);
-    if (!out) {
-        logErrno("summary json open failed");
-        return false;
-    }
-    out << "{\n";
-    out << "  \"totalPatients\": " << payload.totalPatients << ",\n";
-    out << "  \"waitingRoomCapacity\": " << payload.waitingRoomCapacity << ",\n";
-    out << "  \"queueRegistrationLen\": " << payload.queueRegistrationLen << ",\n";
-    out << "  \"triage\": {\n";
-    out << "    \"red\": " << payload.triageRed << ",\n";
-    out << "    \"yellow\": " << payload.triageYellow << ",\n";
-    out << "    \"green\": " << payload.triageGreen << ",\n";
-    out << "    \"sentHome\": " << payload.triageSentHome << "\n";
-    out << "  },\n";
-    out << "  \"dispositions\": {\n";
-    out << "    \"home\": " << payload.outcomeHome << ",\n";
-    out << "    \"ward\": " << payload.outcomeWard << ",\n";
-    out << "    \"other\": " << payload.outcomeOther << "\n";
-    out << "  },\n";
-    out << "  \"simulatedSeconds\": " << payload.simulatedSeconds << ",\n";
-    out << "  \"timeScaleMsPerSimMinute\": " << payload.timeScaleMsPerSimMinute << ",\n";
-    out << "  \"simulationDurationMinutes\": " << payload.simulationDurationMinutes << ",\n";
-    out << "  \"processes\": {\n";
-    out << "    \"director\": " << payload.directorPid << ",\n";
-    out << "    \"registration1\": " << payload.registration1Pid << ",\n";
-    out << "    \"triage\": " << payload.triagePid << ",\n";
-    out << "    \"specialists\": {\n";
-    for (int i = 0; i < kSpecialistCount; ++i) {
-        out << "      \"" << SpecialistNames::name(i) << "\": " << payload.specialistPids[i];
-        if (i < kSpecialistCount - 1) out << ",\n";
-        else out << "\n";
-    }
-    out << "    }\n";
-    out << "  },\n";
-    out << "  \"registration2History\": [";
-    for (size_t i = 0; i < payload.reg2History.size(); ++i) {
-        if (i > 0) out << ", ";
-        out << payload.reg2History[i];
-    }
-    out << "]\n";
-    out << "}\n";
-    return true;
-}
-
-bool writeSummaryCsv(const SummaryPayload& payload, const std::string& path) {
-    std::ofstream out(path, std::ios::out | std::ios::trunc);
-    if (!out) {
-        logErrno("summary csv open failed");
-        return false;
-    }
-    out << "key,value\n";
-    out << "totalPatients," << payload.totalPatients << "\n";
-    out << "waitingRoomCapacity," << payload.waitingRoomCapacity << "\n";
-    out << "queueRegistrationLen," << payload.queueRegistrationLen << "\n";
-    out << "triageRed," << payload.triageRed << "\n";
-    out << "triageYellow," << payload.triageYellow << "\n";
-    out << "triageGreen," << payload.triageGreen << "\n";
-    out << "triageSentHome," << payload.triageSentHome << "\n";
-    out << "outcomeHome," << payload.outcomeHome << "\n";
-    out << "outcomeWard," << payload.outcomeWard << "\n";
-    out << "outcomeOther," << payload.outcomeOther << "\n";
-    out << "simulatedSeconds," << payload.simulatedSeconds << "\n";
-    out << "timeScaleMsPerSimMinute," << payload.timeScaleMsPerSimMinute << "\n";
-    out << "simulationDurationMinutes," << payload.simulationDurationMinutes << "\n";
-    out << "directorPid," << payload.directorPid << "\n";
-    out << "registration1Pid," << payload.registration1Pid << "\n";
-    out << "triagePid," << payload.triagePid << "\n";
-    for (int i = 0; i < kSpecialistCount; ++i) {
-        out << "specialist_" << SpecialistNames::name(i) << "," << payload.specialistPids[i] << "\n";
-    }
-    out << "registration2History,\"" << joinHistory(payload.reg2History) << "\"\n";
-    return true;
-}
-
 bool writeSummary(const SummaryPayload& payload, const std::string& path) {
     std::ofstream out(path, std::ios::out | std::ios::trunc);
     if (!out) {
         logErrno("summary file open failed");
         return false;
     }
-    if (!writeSummaryText(payload, out)) {
-        return false;
-    }
-    std::string base = summaryBaseFromPath(path);
-    return writeSummaryJson(payload, base + ".json") && writeSummaryCsv(payload, base + ".csv");
+    return writeSummaryText(payload, out);
 }
 
 void destroyIpc(const IpcIds& ids, SharedState* attachedState) {
@@ -483,13 +420,7 @@ void destroyIpc(const IpcIds& ids, SharedState* attachedState) {
 }
 } // namespace
 
-/**
- * @brief Full orchestrator: create IPC, fork/exec children, manage signals, write summary, and clean up IPC.
- * @param selfPath path to current executable (used for all execv calls).
- * @param config validated simulation configuration.
- * @param logPathOverride optional log path (nullptr -> timestamped default).
- * @return 0 on clean shutdown, non-zero on failure.
- */
+// Director entry point (see header for details).
 int Director::run(const std::string& selfPath, const Config& config, const std::string* logPathOverride) {
     IpcIds ids;
     ids.specialistsQueue.fill(-1);
@@ -515,22 +446,10 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
 
     pid_t loggerPid = -1;
     if (ok) {
-        loggerPid = fork();
-        if (loggerPid == -1) {
-            logErrno("fork for logger failed");
-            ok = false;
-        } else if (loggerPid == 0) {
-            std::string queueIdStr = std::to_string(ids.logQueue);
-            std::vector<char*> args;
-            args.push_back(const_cast<char*>(selfPath.c_str()));
-            args.push_back(const_cast<char*>("logger"));
-            args.push_back(const_cast<char*>(queueIdStr.c_str()));
-            args.push_back(const_cast<char*>(logPath.c_str()));
-            args.push_back(nullptr);
-            execv(selfPath.c_str(), args.data());
-            logErrno("execv for logger failed");
-            _exit(1);
-        }
+        std::string queueIdStr = std::to_string(ids.logQueue);
+        std::vector<std::string> args{selfPath, "logger", queueIdStr, logPath};
+        loggerPid = forkExec(selfPath, args, "fork for logger failed", "execv for logger failed");
+        if (loggerPid == -1) ok = false;
     }
 
     // Handle Ctrl+C to request early stop.
@@ -547,7 +466,7 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
 
     long long simStartMs = monotonicMs();
     auto simNow = [&]() { return simMinutesFrom(simStartMs, config.timeScaleMsPerSimMinute); };
-    auto realNow = [&]() { return realMinutesFrom(simStartMs); };
+    // Scales a base duration with the configured time scale; preserves zero/negative as zero.
     auto scaleAllowZero = [&](int baseMs) {
         if (baseMs <= 0) return 0;
         long long scaled = static_cast<long long>(baseMs) * config.timeScaleMsPerSimMinute /
@@ -555,6 +474,7 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
         if (scaled <= 0) scaled = 1;
         return static_cast<int>(scaled);
     };
+    // Scales a base duration and clamps to at least 1 ms to avoid zero-time steps.
     auto scaleAtLeastOne = [&](int baseMs) {
         int v = scaleAllowZero(baseMs);
         return v <= 0 ? 1 : v;
@@ -564,6 +484,13 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
     int scaledSpecMin = scaleAtLeastOne(config.specialistExamMinMs);
     int scaledSpecMax = scaleAtLeastOne(config.specialistExamMaxMs);
     if (scaledSpecMax < scaledSpecMin) scaledSpecMax = scaledSpecMin;
+    int scaledLeaveMin = scaleAtLeastOne(config.specialistLeaveMinMs);
+    int scaledLeaveMax = scaleAtLeastOne(config.specialistLeaveMaxMs);
+    if (scaledLeaveMax < scaledLeaveMin) scaledLeaveMax = scaledLeaveMin;
+    bool reconcileWaitSemEnabled = config.reconcileWaitSem != 0;
+    if (const char* env = std::getenv("SORSIM_RECONCILE_WAITSEM")) {
+        reconcileWaitSemEnabled = std::string(env) == "1";
+    }
 
     if (ok && shared) {
         shared->currentInWaitingRoom = 0;
@@ -579,6 +506,8 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
         shared->triageServiceMs = scaledTriageMs;
         shared->specialistExamMinMs = scaledSpecMin;
         shared->specialistExamMaxMs = scaledSpecMax;
+        shared->specialistLeaveMinMs = scaledLeaveMin;
+        shared->specialistLeaveMaxMs = scaledLeaveMax;
         shared->outcomeHome = shared->outcomeWard = shared->outcomeOther = 0;
         shared->directorPid = getpid();
         shared->registration1Pid = shared->registration2Pid = shared->triagePid = 0;
@@ -611,7 +540,10 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
                  " regMs=" + std::to_string(scaledRegMs) +
                  " triageMs=" + std::to_string(scaledTriageMs) +
                  " specMinMax=" + std::to_string(scaledSpecMin) +
-                 "/" + std::to_string(scaledSpecMax));
+                 "/" + std::to_string(scaledSpecMax) +
+                 " leaveMinMax=" + std::to_string(scaledLeaveMin) +
+                 "/" + std::to_string(scaledLeaveMax) +
+                 " reconcileWaitSem=" + std::to_string(reconcileWaitSemEnabled ? 1 : 0));
         logEvent(ids.logQueue, Role::Director, simTime,
                  "Director PIDs: reg1=" + std::to_string(reg1Pid) +
                  " reg2=" + std::to_string(reg2Pid) +
@@ -620,19 +552,10 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
     }
 
     if (ok) {
-        reg1Pid = fork();
+        std::vector<std::string> args{selfPath, "registration", selfPath};
+        reg1Pid = forkExec(selfPath, args, "fork for registration failed", "execv for registration failed");
         if (reg1Pid == -1) {
-            logErrno("fork for registration failed");
             ok = false;
-        } else if (reg1Pid == 0) {
-            std::vector<char*> args;
-            args.push_back(const_cast<char*>(selfPath.c_str()));
-            args.push_back(const_cast<char*>("registration"));
-            args.push_back(const_cast<char*>(selfPath.c_str())); // key path same as executable
-            args.push_back(nullptr);
-            execv(selfPath.c_str(), args.data());
-            logErrno("execv for registration failed");
-            _exit(1);
         } else {
             if (shared) {
                 shared->registration1Pid = reg1Pid;
@@ -641,19 +564,10 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
         }
     }
     if (ok) {
-        triagePid = fork();
+        std::vector<std::string> args{selfPath, "triage", selfPath};
+        triagePid = forkExec(selfPath, args, "fork for triage failed", "execv for triage failed");
         if (triagePid == -1) {
-            logErrno("fork for triage failed");
             ok = false;
-        } else if (triagePid == 0) {
-            std::vector<char*> args;
-            args.push_back(const_cast<char*>(selfPath.c_str()));
-            args.push_back(const_cast<char*>("triage"));
-            args.push_back(const_cast<char*>(selfPath.c_str())); // key path
-            args.push_back(nullptr);
-            execv(selfPath.c_str(), args.data());
-            logErrno("execv for triage failed");
-            _exit(1);
         } else {
             if (shared) {
                 shared->triagePid = triagePid;
@@ -663,30 +577,20 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
     }
 
     if (ok) {
-        generatorPid = fork();
+        std::vector<std::string> argVals = {
+            std::to_string(config.N_waitingRoom),
+            std::to_string(config.K_registrationThreshold),
+            std::to_string(config.simulationDurationMinutes),
+            std::to_string(config.timeScaleMsPerSimMinute),
+            std::to_string(config.randomSeed),
+            std::to_string(config.patientGenMinMs),
+            std::to_string(config.patientGenMaxMs)
+        };
+        std::vector<std::string> args{selfPath, "patient_generator", selfPath};
+        args.insert(args.end(), argVals.begin(), argVals.end());
+        generatorPid = forkExec(selfPath, args, "fork for patient generator failed", "execv for patient generator failed");
         if (generatorPid == -1) {
-            logErrno("fork for patient generator failed");
             ok = false;
-        } else if (generatorPid == 0) {
-            // pass config values as args
-            std::vector<std::string> argVals = {
-                std::to_string(config.N_waitingRoom),
-                std::to_string(config.K_registrationThreshold),
-                std::to_string(config.simulationDurationMinutes),
-                std::to_string(config.timeScaleMsPerSimMinute),
-                std::to_string(config.randomSeed)
-            };
-            std::vector<char*> args;
-            args.push_back(const_cast<char*>(selfPath.c_str()));
-            args.push_back(const_cast<char*>("patient_generator"));
-            args.push_back(const_cast<char*>(selfPath.c_str())); // key path
-            for (auto& s : argVals) {
-                args.push_back(const_cast<char*>(s.c_str()));
-            }
-            args.push_back(nullptr);
-            execv(selfPath.c_str(), args.data());
-            logErrno("execv for patient generator failed");
-            _exit(1);
         } else {
             logEvent(ids.logQueue, Role::Director, simNow(), "Patient generator spawned");
         }
@@ -695,29 +599,17 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
     std::array<pid_t, kSpecialistCount> specialistPidMap{};
     std::vector<pid_t> reg2History;
     if (ok) {
-        int specCount = 6;
-        for (int i = 0; i < specCount; ++i) {
-            pid_t pid = fork();
+        for (int i = 0; i < kSpecialistCount; ++i) {
+            std::string typeStr = std::to_string(i);
+            std::vector<std::string> args{selfPath, "specialist", selfPath, typeStr};
+            pid_t pid = forkExec(selfPath, args, "fork for specialist failed", "execv for specialist failed");
             if (pid == -1) {
-                logErrno("fork for specialist failed");
                 ok = false;
                 break;
-            } else if (pid == 0) {
-                std::string typeStr = std::to_string(i);
-                std::vector<char*> args;
-                args.push_back(const_cast<char*>(selfPath.c_str()));
-                args.push_back(const_cast<char*>("specialist"));
-                args.push_back(const_cast<char*>(selfPath.c_str())); // key path
-                args.push_back(const_cast<char*>(typeStr.c_str()));
-                args.push_back(nullptr);
-                execv(selfPath.c_str(), args.data());
-                logErrno("execv for specialist failed");
-                _exit(1);
-            } else {
-                specialistPids.push_back(pid);
-                specialistPidMap[i] = pid;
-                logEvent(ids.logQueue, Role::Director, simNow(), "Specialist spawned type " + std::to_string(i));
             }
+            specialistPids.push_back(pid);
+            specialistPidMap[i] = pid;
+            logEvent(ids.logQueue, Role::Director, simNow(), "Specialist spawned type " + std::to_string(i));
         }
     }
 
@@ -751,14 +643,13 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
     RandomGenerator directorRng(static_cast<unsigned int>(std::time(nullptr)));
     int sigusr1CooldownMs = 1000; // attempt SIGUSR1 roughly every second if specialists exist
     int elapsedSinceUsr1 = 0;
-    bool durationStopIssued = false;
     long long lastMonitorLogMs = monotonicMs();
     while (!stopRequested.load()) {
         usleep(static_cast<useconds_t>(chunkMs * 1000));
         int simTime = simNow();
-        if (!durationStopIssued && config.simulationDurationMinutes > 0 &&
-            realNow() >= config.simulationDurationMinutes) {
-            durationStopIssued = true;
+        // Stop based on real wall-clock minutes, not simulated minutes; keeps duration tied to actual time.
+        if (config.simulationDurationMinutes > 0 &&
+            realMinutesFrom(simStartMs) >= config.simulationDurationMinutes) {
             stopRequested.store(true);
             logEvent(ids.logQueue, Role::Director, simTime,
                      "Simulation duration reached (" + std::to_string(config.simulationDurationMinutes) + " min)");
@@ -778,20 +669,13 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
             int waitingRoomLoad = shared->currentInWaitingRoom;
             stateSemGuard.post();
             if (sharedLen > qlen) qlen = sharedLen;
-            int openThreshold = config.K_registrationThreshold; // spec: if queue length >= K
-            int closeThreshold = config.N_waitingRoom / 3;     // spec: close if queue < N/3
+            // Hysteresis: open when queue >= K, close when queue falls below N/3.
+            int openThreshold = config.K_registrationThreshold;
+            int closeThreshold = config.N_waitingRoom / 3;
             if (!reg2Flag && qlen >= openThreshold) {
-                pid_t pid = fork();
-                if (pid == 0) {
-                    std::vector<char*> args;
-                    args.push_back(const_cast<char*>(selfPath.c_str()));
-                    args.push_back(const_cast<char*>("registration2"));
-                    args.push_back(const_cast<char*>(selfPath.c_str()));
-                    args.push_back(nullptr);
-                    execv(selfPath.c_str(), args.data());
-                    logErrno("execv for registration2 failed");
-                    _exit(1);
-                } else if (pid > 0) {
+                std::vector<std::string> args{selfPath, "registration2", selfPath};
+                pid_t pid = forkExec(selfPath, args, "fork for registration2 failed", "execv for registration2 failed");
+                if (pid > 0) {
                     reg2Pid = pid;
                     reg2History.push_back(pid);
                     stateSemGuard.wait();
@@ -858,16 +742,13 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
                 semPid = semctl(ids.semWaitingRoom, 0, GETPID);
                 waiters = semctl(ids.semWaitingRoom, 0, GETNCNT);
                 zeroWaiters = semctl(ids.semWaitingRoom, 0, GETZCNT);
+                // Best-effort stats read; logging tolerates IPC_STAT failure.
                 semctl(ids.semWaitingRoom, 0, IPC_STAT, &semInfo);
             }
 
-            // Optional reconcile: if enabled and we detect missing tokens, reset waitSem to expectedFree to keep simulation flowing while we investigate.
-            // This is a debug guardrail for a rare SysV semaphore drift where tokens vanish despite matching acquire/release counts.
-            static bool reconcileEnabled = []() {
-                const char* env = std::getenv("SORSIM_RECONCILE_WAITSEM");
-                return env && std::string(env) == "1";
-            }();
-            if (reconcileEnabled && missing > 0 && ids.semWaitingRoom != -1) {
+            // Optional reconcile: detects rare SysV semaphore token drift (free seats mismatch semaphore value)
+            // and resets the semaphore to the expected count to keep the simulation moving while we investigate.
+            if (reconcileWaitSemEnabled && missing > 0 && ids.semWaitingRoom != -1) {
                 int setRes = semctl(ids.semWaitingRoom, 0, SETVAL, expectedFree);
                 logEvent(ids.logQueue, Role::Director, simTime,
                          "ERROR MON RECONCILE set waitSem from " + std::to_string(wsemVal) +
@@ -957,15 +838,7 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
     }
     waitWithTimeout(loggerPid, "logger");
 
-    int status = 0;
-
     destroyIpc(ids, shared);
 
-    if (!ok) {
-        return 1;
-    }
-    if (loggerPid > 0 && WIFEXITED(status)) {
-        return WEXITSTATUS(status);
-    }
     return ok ? 0 : 1;
 }

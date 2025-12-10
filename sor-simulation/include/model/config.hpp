@@ -13,4 +13,9 @@ struct Config {
     int triageServiceMs;
     int specialistExamMinMs;
     int specialistExamMaxMs;
+    int specialistLeaveMinMs;
+    int specialistLeaveMaxMs;
+    int reconcileWaitSem; // 0/1 toggle for waitSem reconciliation guardrail
+    int patientGenMinMs;
+    int patientGenMaxMs;
 };

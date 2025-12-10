@@ -14,13 +14,17 @@ std::string formatPatientLabel(const PatientView& pv, Stage areaStage) {
     if (displayPid > 0) {
         label += "pid=" + std::to_string(displayPid);
     } else {
-        label += "P" + std::to_string(pv.id);
+        label += "id=" + std::to_string(pv.id);
     }
 
     const char* reset = "\033[0m";
-    std::string bg = "\033[47m"; // default gray
+    std::string bg = "\033[47m"; // default white
     if (areaStage == Stage::RegistrationQueue) {
-        bg = "\033[48;5;208m"; // orange background for reg queue
+        if (pv.registrationWindow == "reg2") {
+            bg = "\033[43m"; // yellow for reg2
+        } else {
+            bg = "\033[48;5;208m"; // orange for reg1/default
+        }
     } else {
         switch (pv.color) {
             case TriageColor::Red: bg = "\033[41m"; break;

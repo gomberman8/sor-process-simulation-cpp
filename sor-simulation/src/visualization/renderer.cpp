@@ -9,9 +9,7 @@
 #include <sstream>
 
 
-//TODO if a doctor is on leave (SIGUSR1), let him be displayed in his section in red (his name should have a red background)
-
-
+// Render waiting room/triage/entrance overview with live stats (see header).
 void renderTopSection(const VisualizationState& state) {
     const int totalWidth = 118;
     const int colWaiting = 60;
@@ -104,11 +102,6 @@ void renderTopSection(const VisualizationState& state) {
     }
 
     std::vector<const PatientView*> triageOrdered = triageList;
-    if (state.triageQueue > 0) {
-        trimQueue(triageOrdered, state.triageQueue, [](const PatientView* p) {
-            return p->triageOrder < 0 ? p->lastSimTime : p->triageOrder;
-        });
-    }
     std::sort(triageOrdered.begin(), triageOrdered.end(), [](const PatientView* a, const PatientView* b) {
         int oa = a->triageOrder < 0 ? a->lastSimTime : a->triageOrder;
         int ob = b->triageOrder < 0 ? b->lastSimTime : b->triageOrder;
@@ -116,7 +109,10 @@ void renderTopSection(const VisualizationState& state) {
     });
 
     std::vector<std::string> waitingTokens;
-    for (auto* p : waitingCombined) waitingTokens.push_back(formatPatientLabel(*p, p->stage));
+    for (auto* p : waitingCombined) {
+        Stage renderStage = p->registrationInProgress ? Stage::RegistrationQueue : Stage::WaitingRoom;
+        waitingTokens.push_back(formatPatientLabel(*p, renderStage));
+    }
 
     std::vector<std::string> triageTokens;
     for (auto* p : triageOrdered) triageTokens.push_back(formatPatientLabel(*p, Stage::TriageQueue));
@@ -151,6 +147,7 @@ void renderTopSection(const VisualizationState& state) {
     }
 }
 
+// Render the trailing set of recent log actions (see header).
 void renderActions(const VisualizationState& state) {
     const int totalWidth = 118;
     const int rightWidth = 30;
@@ -167,11 +164,22 @@ void renderActions(const VisualizationState& state) {
     std::cout << border << "\n";
 }
 
+// Render specialist queues/active patients and per-specialist stats (see header).
 void renderSpecialists(const VisualizationState& state) {
     const int totalWidth = 118;
     const int colWidth = totalWidth / 3 - 1;
     std::array<std::vector<const PatientView*>, 6> queues{};
     std::array<std::vector<const PatientView*>, 6> active{};
+    auto specialistLabel = [&](int idx) {
+        SpecialistType type = static_cast<SpecialistType>(idx);
+        if (state.specialistOnLeave[idx]) {
+            const char* reset = "\033[0m";
+            const char* bg = "\033[41m";
+            const char* fg = "\033[97m";
+            return std::string(bg) + fg + specialistName(type) + reset;
+        }
+        return specialistNameColored(type);
+    };
 
     for (const auto& kv : state.patients) {
         const auto& p = kv.second;
@@ -197,7 +205,7 @@ void renderSpecialists(const VisualizationState& state) {
             int idx = row * 3 + col;
             if (idx >= 6) continue;
             std::stringstream ss;
-            ss << specialistNameColored(static_cast<SpecialistType>(idx)) << " pid=" << state.specialistPids[idx] << " q="
+            ss << specialistLabel(idx) << " pid=" << state.specialistPids[idx] << " q="
                << queues[idx].size() << " act=" << active[idx].size();
             headers[col] = padded(ss.str(), colWidth);
         }
@@ -277,6 +285,7 @@ void renderSpecialists(const VisualizationState& state) {
     std::cout << border << "\n";
 }
 
+// Full frame render: clears screen then draws all sections (see header).
 void render(const VisualizationState& state) {
     // Clear screen (including scrollback) and move cursor home so each frame replaces the previous one.
     std::cout << "\033[H\033[2J\033[3J";

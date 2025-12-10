@@ -42,13 +42,6 @@ int currentSimMinutes(const SharedState* state) {
     return static_cast<int>(delta / state->timeScaleMsPerSimMinute);
 }
 
-int semaphoreValue(int semId) {
-    if (semId < 0) return 0;
-    int val = semctl(semId, 0, GETVAL);
-    if (val == -1) return 0;
-    return val;
-}
-
 struct ChildArgs {
     int logQueueId;
     int patientId;
@@ -56,6 +49,9 @@ struct ChildArgs {
     const SharedState* shared;
 };
 
+/**
+ * @brief Guardian helper thread: logs presence and waits for stop flag to end.
+ */
 void* childThreadMain(void* arg) {
     ChildArgs* args = static_cast<ChildArgs*>(arg);
     // Child shares waiting room with guardian; just log presence and wait for stop.
@@ -70,16 +66,7 @@ void* childThreadMain(void* arg) {
 }
 } // namespace
 
-/**
- * @brief Patient lifecycle: attach to shared IPC, take waiting-room slots, enqueue to registration, and honor SIGUSR2; guardians modeled via a helper thread.
- * @param keyPath path used for ftok keys.
- * @param patientId logical id.
- * @param age age in years.
- * @param isVip VIP flag.
- * @param hasGuardian child with guardian flag.
- * @param personsCount 1 or 2 (with guardian).
- * @return 0 on completion or orderly shutdown.
- */
+// Patient lifecycle entry (see header for details).
 int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip, bool hasGuardian, int personsCount) {
     // Ignore SIGINT so only SIGUSR2 controls shutdown.
     struct sigaction saIgnore {};
@@ -135,11 +122,39 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
     setLogMetricsContext({statePtr, regQueue.id(), triageQueueId, specQueueIds,
                           waitSem.id(), stateSem.id()});
 
+    /**
+     * @brief Returns waiting-room capacity and rolls back shared counters symmetrically.
+     */
+    auto releaseSlotsAndCounters = [&](int slots) {
+        for (int i = 0; i < slots; ++i) {
+            waitSem.post();
+        }
+        stateSem.wait();
+        if (statePtr->currentInWaitingRoom >= slots) {
+            statePtr->currentInWaitingRoom -= slots;
+        }
+        if (statePtr->queueRegistrationLen > 0) {
+            statePtr->queueRegistrationLen -= 1;
+        }
+        if (statePtr->totalPatients > 0) {
+            statePtr->totalPatients -= 1;
+        }
+        stateSem.post();
+    };
+
     // Spawn a lightweight thread to model the child presence (if any).
     pthread_t childThread{};
     ChildArgs* childArgs = nullptr;
     std::atomic<bool> childStop(false);
     bool childStarted = false;
+    // Ensure guardian helper thread is stopped and cleaned up.
+    auto stopChildThread = [&]() {
+        if (childStarted) {
+            childStop.store(true);
+            pthread_join(childThread, nullptr);
+            delete childArgs;
+        }
+    };
     if (hasGuardian && personsCount == 2) {
         childArgs = new ChildArgs{logQueue.id(), patientId, &childStop, statePtr};
         if (pthread_create(&childThread, nullptr, childThreadMain, childArgs) == 0) {
@@ -159,6 +174,7 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
              " persons=" + std::to_string(personsCount));
 
     // Acquire waiting room slots
+    //FIXME this would need changing, suspicious activity
     int acquired = 0;
     for (int i = 0; i < personsCount; ++i) {
         if (!waitSem.wait()) {
@@ -185,11 +201,7 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
         for (int i = 0; i < personsCount; ++i) {
             waitSem.post();
         }
-        if (childStarted) {
-            childStop.store(true);
-            pthread_join(childThread, nullptr);
-            delete childArgs;
-        }
+        stopChildThread();
         shm.detach(statePtr);
         return 0;
     }
@@ -199,18 +211,13 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
         for (int i = 0; i < personsCount; ++i) {
             waitSem.post();
         }
-        if (childStarted) {
-            childStop.store(true);
-            pthread_join(childThread, nullptr);
-            delete childArgs;
-        }
+        stopChildThread();
         shm.detach(statePtr);
         return 1;
     }
     statePtr->currentInWaitingRoom += personsCount;
     statePtr->queueRegistrationLen += 1;
     statePtr->totalPatients += 1;
-    int insideAfter = statePtr->currentInWaitingRoom;
     stateSem.post();
 
     simTime = currentSimMinutes(statePtr);
@@ -231,30 +238,13 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
     ev.personsCount = personsCount;
     std::strncpy(ev.extra, hasGuardian ? "guardian" : "solo", sizeof(ev.extra) - 1);
 
-    // Non-blocking send with retry to avoid deadlock if registration queue temporarily full.
+    // Non-blocking send with retry (short sleep) to avoid blocking on a full queue.
     size_t payloadSize = sizeof(EventMessage) - sizeof(long);
     while (true) {
         if (stopFlag.load()) {
             // Release slots and exit quietly.
-            for (int i = 0; i < personsCount; ++i) {
-                waitSem.post();
-            }
-            stateSem.wait();
-            if (statePtr->currentInWaitingRoom >= personsCount) {
-                statePtr->currentInWaitingRoom -= personsCount;
-            }
-            if (statePtr->queueRegistrationLen > 0) {
-                statePtr->queueRegistrationLen -= 1;
-            }
-            if (statePtr->totalPatients > 0) {
-                statePtr->totalPatients -= 1;
-            }
-            stateSem.post();
-            if (childStarted) {
-                childStop.store(true);
-                pthread_join(childThread, nullptr);
-                delete childArgs;
-            }
+            releaseSlotsAndCounters(personsCount);
+            stopChildThread();
             shm.detach(statePtr);
             return 0;
         }
@@ -267,25 +257,8 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
         }
         logErrno("Patient send to registration failed");
         // Release slots and counters on failure to avoid leaking capacity.
-        for (int i = 0; i < personsCount; ++i) {
-            waitSem.post();
-        }
-        stateSem.wait();
-        if (statePtr->currentInWaitingRoom >= personsCount) {
-            statePtr->currentInWaitingRoom -= personsCount;
-        }
-        if (statePtr->queueRegistrationLen > 0) {
-            statePtr->queueRegistrationLen -= 1;
-        }
-        if (statePtr->totalPatients > 0) {
-            statePtr->totalPatients -= 1;
-        }
-        stateSem.post();
-        if (childStarted) {
-            childStop.store(true);
-            pthread_join(childThread, nullptr);
-            delete childArgs;
-        }
+        releaseSlotsAndCounters(personsCount);
+        stopChildThread();
         shm.detach(statePtr);
         return 1;
     }
@@ -295,11 +268,7 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
     logEvent(logQueue.id(), Role::Patient, simTime, "Patient registered id=" + std::to_string(patientId));
 
     // Stop child thread if it was started.
-    if (childStarted) {
-        childStop.store(true);
-        pthread_join(childThread, nullptr);
-        delete childArgs;
-    }
+    stopChildThread();
     shm.detach(statePtr);
     return 0;
 }

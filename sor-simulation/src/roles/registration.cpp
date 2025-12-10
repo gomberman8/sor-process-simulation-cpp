@@ -29,12 +29,14 @@ void handleSigusr2(int) {
     sigusr2Seen.store(true);
 }
 
+/** @brief Monotonic clock in milliseconds (best effort). */
 long long monotonicMs() {
     struct timespec ts {};
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) return 0;
     return static_cast<long long>(ts.tv_sec) * 1000LL + ts.tv_nsec / 1000000LL;
 }
 
+/** @brief Derive simulation minutes from shared state timing. */
 int currentSimMinutes(const SharedState* state) {
     if (!state || state->timeScaleMsPerSimMinute <= 0) return 0;
     long long now = monotonicMs();
@@ -43,6 +45,7 @@ int currentSimMinutes(const SharedState* state) {
     return static_cast<int>(delta / state->timeScaleMsPerSimMinute);
 }
 
+/** @brief Safe queue length probe (0 on error). */
 int queueLen(int qid) {
     if (qid < 0) return 0;
     struct msqid_ds stats {};
@@ -52,6 +55,7 @@ int queueLen(int qid) {
     return static_cast<int>(stats.msg_qnum);
 }
 
+/** @brief Safe semaphore value probe (0 on error). */
 int semaphoreValue(int semId) {
     if (semId < 0) return 0;
     int val = semctl(semId, 0, GETVAL);
@@ -60,12 +64,7 @@ int semaphoreValue(int semId) {
 }
 } // namespace
 
-/**
- * @brief Consume arrivals from the registration queue, adjust shared counters, forward to triage, and exit on SIGUSR2.
- * @param keyPath path used for ftok keys.
- * @param isSecond true if this instance is the auxiliary window.
- * @return 0 on normal exit.
- */
+// Registration window entry point (see header for details).
 int Registration::run(const std::string& keyPath, bool isSecond) {
     // Ignore SIGINT so only SIGUSR2 triggers shutdown.
     struct sigaction saIgnore {};
@@ -122,6 +121,22 @@ int Registration::run(const std::string& keyPath, bool isSecond) {
     setLogMetricsContext({statePtr, regQueue.id(), triageQueue.id(), specQueueIds,
                           waitSem.id(), stateSem.id()});
 
+    // Helper to release waiting-room capacity and update shared counters symmetrically.
+    auto releaseSlots = [&](int count, const char* errTag) {
+        stateSem.wait();
+        if (statePtr->currentInWaitingRoom >= count) {
+            statePtr->currentInWaitingRoom -= count;
+        } else {
+            statePtr->currentInWaitingRoom = 0;
+        }
+        stateSem.post();
+        for (int i = 0; i < count; ++i) {
+            if (!waitSem.post()) {
+                logErrno(errTag);
+            }
+        }
+    };
+
     Role myRole = isSecond ? Role::Registration2 : Role::Registration1;
     // Log includes PID via logger; message text focuses on patient ids/flags.
     int simTime = currentSimMinutes(statePtr);
@@ -148,6 +163,12 @@ int Registration::run(const std::string& keyPath, bool isSecond) {
             statePtr->queueRegistrationLen -= 1;
         }
         stateSem.post();
+
+        simTime = currentSimMinutes(statePtr);
+        logEvent(logQueue.id(), myRole, simTime,
+                 "Registering patient id=" + std::to_string(ev.patientId) +
+                 " vip=" + std::to_string(ev.isVip) +
+                 " persons=" + std::to_string(ev.personsCount));
 
         // Simulate service time to allow queue buildup (and potential reg2 activation).
         if (serviceMs > 0) {
@@ -180,32 +201,10 @@ int Registration::run(const std::string& keyPath, bool isSecond) {
                      " persons=" + std::to_string(ev.personsCount));
 
             // Free waiting room capacity as patient leaves for triage.
-            stateSem.wait();
-            if (statePtr->currentInWaitingRoom >= ev.personsCount) {
-                statePtr->currentInWaitingRoom -= ev.personsCount;
-            } else {
-                statePtr->currentInWaitingRoom = 0;
-            }
-            stateSem.post();
-            for (int i = 0; i < ev.personsCount; ++i) {
-                if (!waitSem.post()) {
-                    logErrno("waitSem post failed (reg)");
-                }
-            }
+            releaseSlots(ev.personsCount, "waitSem post failed (reg)");
         } else {
             // If we failed to forward (queue gone or fatal error), free the slots so we don't leak capacity.
-            stateSem.wait();
-            if (statePtr->currentInWaitingRoom >= ev.personsCount) {
-                statePtr->currentInWaitingRoom -= ev.personsCount;
-            } else {
-                statePtr->currentInWaitingRoom = 0;
-            }
-            stateSem.post();
-            for (int i = 0; i < ev.personsCount; ++i) {
-                if (!waitSem.post()) {
-                    logErrno("waitSem post failed (reg drop)");
-                }
-            }
+            releaseSlots(ev.personsCount, "waitSem post failed (reg drop)");
             simTime = currentSimMinutes(statePtr);
             logEvent(logQueue.id(), myRole, simTime,
                      "Dropped patient id=" + std::to_string(ev.patientId) +
@@ -224,7 +223,7 @@ int Registration::run(const std::string& keyPath, bool isSecond) {
             stateSem.post();
             simTime = currentSimMinutes(statePtr);
             logEvent(logQueue.id(), myRole, simTime,
-                     "ERROR REG HEARTBEAT qLen=" + std::to_string(qlen) +
+                     "HEARTBEAT REG qLen=" + std::to_string(qlen) +
                      " waitSem=" + std::to_string(wsemVal) +
                      " inside=" + std::to_string(inside) +
                      " regPid=" + std::to_string(getpid()));

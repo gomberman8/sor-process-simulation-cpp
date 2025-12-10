@@ -26,8 +26,12 @@ std::atomic<bool> pausedFlag(false);
 std::atomic<bool> sigusr2Seen(false);
 
 void handleSigusr2(int) { stopFlag.store(true); }
-void handleSigusr1(int) { pausedFlag.store(true); }
+void handleSigusr1(int) {
+    bool expected = false;
+    pausedFlag.compare_exchange_strong(expected, true);
+}
 
+/** @brief Map enum to human-readable specialist name. */
 std::string specToString(SpecialistType t) {
     switch (t) {
         case SpecialistType::Cardiologist: return "Cardiologist";
@@ -40,6 +44,7 @@ std::string specToString(SpecialistType t) {
     }
 }
 
+/** @brief Role enum corresponding to specialist type (for logging). */
 Role roleForType(SpecialistType t) {
     switch (t) {
         case SpecialistType::Cardiologist: return Role::SpecialistCardio;
@@ -52,17 +57,20 @@ Role roleForType(SpecialistType t) {
     }
 }
 
+/** @brief Highest message type a specialist should accept (priority range). */
 long maxMsgTypeForSpec(SpecialistType t) {
     // base + specialist*10 + maxPriority(3)
     return static_cast<long>(EventType::PatientToSpecialist) + static_cast<int>(t) * 10 + 3;
 }
 
+/** @brief Monotonic clock in milliseconds (best effort). */
 long long monotonicMs() {
     struct timespec ts {};
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) return 0;
     return static_cast<long long>(ts.tv_sec) * 1000LL + ts.tv_nsec / 1000000LL;
 }
 
+/** @brief Derive simulation minutes from shared state timing. */
 int currentSimMinutes(const SharedState* state) {
     if (!state || state->timeScaleMsPerSimMinute <= 0) return 0;
     long long now = monotonicMs();
@@ -72,12 +80,7 @@ int currentSimMinutes(const SharedState* state) {
 }
 } // namespace
 
-/**
- * @brief Specialist loop: open its queue, handle SIGUSR1 pause/SIGUSR2 stop, consume prioritized patients, update outcomes, and free waiting-room capacity.
- * @param keyPath path used for ftok keys.
- * @param type specialist enum value (0..5).
- * @return 0 on normal exit.
- */
+// Specialist loop entry (see header for details).
 int Specialist::run(const std::string& keyPath, SpecialistType type) {
     // Ignore SIGINT so only SIGUSR2/SIGUSR1 manage lifecycle.
     struct sigaction saIgnore {};
@@ -136,6 +139,12 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
         examMinMs = 10;
         examMaxMs = 40;
     }
+    int leaveMinMs = statePtr->specialistLeaveMinMs;
+    int leaveMaxMs = statePtr->specialistLeaveMaxMs;
+    if (leaveMinMs <= 0 || leaveMaxMs <= 0 || leaveMaxMs < leaveMinMs) {
+        leaveMinMs = 100;
+        leaveMaxMs = 500;
+    }
 
     int registrationQueueId = -1;
     int triageQueueId = -1;
@@ -158,7 +167,7 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
 
     while (!stopFlag.load()) {
         if (pausedFlag.load()) {
-            int pauseMs = rng.uniformInt(100, 500);
+            int pauseMs = rng.uniformInt(leaveMinMs, leaveMaxMs);
             usleep(static_cast<useconds_t>(pauseMs * 1000));
             pausedFlag.store(false);
             simTime = currentSimMinutes(statePtr);

@@ -25,18 +25,21 @@
 namespace {
 std::atomic<bool> stopFlag(false);
 std::atomic<bool> sigusr2Seen(false);
+constexpr int kDefaultTimeScaleMsPerSimMinute = 20;
 
 void handleSigusr2(int) {
     stopFlag.store(true);
     sigusr2Seen.store(true);
 }
 
+/** @brief Monotonic clock in milliseconds (best effort). */
 long long monotonicMs() {
     struct timespec ts {};
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) return 0;
     return static_cast<long long>(ts.tv_sec) * 1000LL + ts.tv_nsec / 1000000LL;
 }
 
+/** @brief Simulation minutes derived from shared state start/time scale. */
 int currentSimMinutes(const SharedState* state) {
     if (!state || state->timeScaleMsPerSimMinute <= 0) return 0;
     long long now = monotonicMs();
@@ -45,6 +48,7 @@ int currentSimMinutes(const SharedState* state) {
     return static_cast<int>(delta / state->timeScaleMsPerSimMinute);
 }
 
+/** @brief Real minutes elapsed since sim start (wall-clock). */
 int currentRealMinutes(const SharedState* state) {
     if (!state) return 0;
     long long now = monotonicMs();
@@ -54,12 +58,7 @@ int currentRealMinutes(const SharedState* state) {
 }
 } // namespace
 
-/**
- * @brief Generate patients at the configured pace, using shared IPC for metrics/logging and reaping/forking children until SIGUSR2.
- * @param keyPath path used for ftok keys (shared with director).
- * @param cfg configuration for time scaling, thresholds, and RNG seed.
- * @return 0 on normal stop, non-zero on error.
- */
+// Patient generator loop (see header for details).
 int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
     // Ignore SIGINT so director controls shutdown via SIGUSR2.
     struct sigaction saIgnore {};
@@ -115,6 +114,31 @@ int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
     }
     std::vector<pid_t> children;
     bool childLimitLogged = false;
+    // Reap finished children to avoid zombies and free process slots.
+    auto reapChildren = [&](std::vector<pid_t>& list) {
+        for (auto it = list.begin(); it != list.end();) {
+            pid_t cpid = *it;
+            if (cpid > 0) {
+                pid_t res = waitpid(cpid, nullptr, WNOHANG);
+                if (res == cpid) {
+                    it = list.erase(it);
+                    continue;
+                }
+            }
+            ++it;
+        }
+    };
+    // Scale intervals with sim speed; clamp to at least 1 ms for positive inputs.
+    auto scaleInterval = [&](int baseMs) {
+        if (baseMs <= 0) return cfg.timeScaleMsPerSimMinute;
+        long long scaled = static_cast<long long>(baseMs) * cfg.timeScaleMsPerSimMinute /
+                           kDefaultTimeScaleMsPerSimMinute;
+        if (scaled <= 0) scaled = 1;
+        return static_cast<int>(scaled);
+    };
+    int genMinMs = scaleInterval(cfg.patientGenMinMs);
+    int genMaxMs = scaleInterval(cfg.patientGenMaxMs);
+    if (genMaxMs < genMinMs) genMaxMs = genMinMs;
 
     while (!stopFlag.load()) {
         // Stop when real duration elapsed (if shared state present).
@@ -128,17 +152,7 @@ int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
         const size_t maxChildren = 2000; // cap concurrent patient processes to avoid fork errors
         while (!stopFlag.load() && children.size() >= maxChildren) {
             // Reap some children to free slots
-            for (auto it = children.begin(); it != children.end();) {
-                pid_t cpid = *it;
-                if (cpid > 0) {
-                    pid_t res = waitpid(cpid, nullptr, WNOHANG);
-                    if (res == cpid) {
-                        it = children.erase(it);
-                        continue;
-                    }
-                }
-            ++it;
-        }
+            reapChildren(children);
             if (children.size() >= maxChildren) {
                 usleep(50 * 1000); // brief pause before retrying
                 if (!childLimitLogged && logId != -1) {
@@ -196,21 +210,11 @@ int PatientGenerator::run(const std::string& keyPath, const Config& cfg) {
 
         children.push_back(pid);
         spawned++;
-        int sleepMs = cfg.timeScaleMsPerSimMinute;
+        int sleepMs = rng.uniformInt(genMinMs, genMaxMs);
         usleep(static_cast<useconds_t>(sleepMs * 1000));
 
         // Reap finished children to avoid zombies and fork failures during long runs.
-        for (auto it = children.begin(); it != children.end();) {
-            pid_t cpid = *it;
-            if (cpid > 0) {
-                pid_t res = waitpid(cpid, nullptr, WNOHANG);
-                if (res == cpid) {
-                    it = children.erase(it);
-                    continue;
-                }
-            }
-            ++it;
-        }
+        reapChildren(children);
     }
 
     // On shutdown or completion, signal remaining children and wait.

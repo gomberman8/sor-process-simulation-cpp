@@ -22,6 +22,8 @@ struct SharedState {
     int triageServiceMs;
     int specialistExamMinMs;
     int specialistExamMaxMs;
+    int specialistLeaveMinMs;
+    int specialistLeaveMaxMs;
 
     int outcomeHome;
     int outcomeWard;

@@ -28,9 +28,28 @@ void trackRegistrationLifecycle(const LogEntry& entry, VisualizationState& state
         if (entry.text.find("Triage shutting down") != std::string::npos) state.triageActive = false;
     }
 }
+
+int specialistIndexByPid(const VisualizationState& state, int pid) {
+    if (pid <= 0) return -1;
+    for (int i = 0; i < kSpecialistCount; ++i) {
+        if (state.specialistPids[i] == pid) return i;
+    }
+    return -1;
+}
 } // namespace
 
 void applyPatientUpdate(const LogEntry& entry, VisualizationState& state) {
+    auto isPatientFlowRole = [](const std::string& role) {
+        return role == "patient" ||
+               role == "triage" ||
+               role == "specialist" ||
+               role == "reg1" ||
+               role == "reg2";
+    };
+    if (!isPatientFlowRole(entry.role)) {
+        return;
+    }
+
     int patientId = -1;
     if (!extractInt(entry.text, "id=", patientId)) {
         return;
@@ -48,6 +67,9 @@ void applyPatientUpdate(const LogEntry& entry, VisualizationState& state) {
     auto setStage = [&](Stage newStage) {
         if (pv.stage == newStage) return;
         pv.stage = newStage;
+        if (newStage != Stage::RegistrationQueue) {
+            pv.registrationInProgress = false;
+        }
         switch (newStage) {
             case Stage::WaitingRoom:
                 pv.waitOrder = ++state.waitSeq;
@@ -89,14 +111,31 @@ void applyPatientUpdate(const LogEntry& entry, VisualizationState& state) {
         return;
     }
 
-    if (entry.role.rfind("reg", 0) == 0 &&
+    if ((entry.role == "reg1" || entry.role == "reg2") &&
+        entry.text.find("Registering patient") != std::string::npos) {
+        setStage(Stage::RegistrationQueue);
+        pv.registrationInProgress = true;
+        pv.registrationWindow = entry.role;
+        return;
+    }
+
+    if ((entry.role == "reg1" || entry.role == "reg2") &&
         entry.text.find("Forwarded patient") != std::string::npos) {
         setStage(Stage::TriageQueue);
+        pv.registrationInProgress = false;
+        pv.registrationWindow.clear();
         extractInt(entry.text, "persons=", pv.persons);
         int vipVal = 0;
         if (extractInt(entry.text, "vip=", vipVal)) {
             pv.isVip = vipVal != 0;
         }
+        return;
+    }
+
+    if ((entry.role == "reg1" || entry.role == "reg2") &&
+        entry.text.find("Dropped patient") != std::string::npos) {
+        pv.registrationInProgress = false;
+        pv.registrationWindow.clear();
         return;
     }
 
@@ -194,11 +233,31 @@ void applyLogEntry(const LogEntry& entry, VisualizationState& state) {
         state.specialistsQueue = entry.specialistsQueue;
     }
 
+    auto markLeave = [&](int pid, bool onLeave) {
+        int idx = specialistIndexByPid(state, pid);
+        if (idx >= 0) {
+            state.specialistOnLeave[idx] = onLeave;
+        }
+    };
+
     if (entry.role == "specialist" && entry.text.find("started") != std::string::npos) {
         SpecialistType t = specialistFromLabel(entry.text);
         if (t != SpecialistType::None) {
             state.specialistPids[static_cast<int>(t)] = entry.pid;
+            state.specialistOnLeave[static_cast<int>(t)] = false;
         }
+    }
+
+    if (entry.role == "director" && entry.text.find("SIGUSR1") != std::string::npos) {
+        int pid = -1;
+        if (extractInt(entry.text, "pid=", pid)) {
+            markLeave(pid, true);
+        }
+    }
+
+    if (entry.role == "specialist" &&
+        entry.text.find("SIGUSR1: temporary leave finished") != std::string::npos) {
+        markLeave(entry.pid, false);
     }
 
     std::string action = "[" + std::to_string(entry.simTime) + "] " + entry.role + ": " + entry.text;

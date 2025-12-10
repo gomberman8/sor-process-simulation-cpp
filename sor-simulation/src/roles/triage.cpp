@@ -30,6 +30,7 @@ void handleSigusr2(int) {
     sigusr2Seen.store(true);
 }
 
+/** @brief Uniformly pick a specialist type. */
 SpecialistType pickSpecialist(RandomGenerator& rng) {
     int r = rng.uniformInt(0, 5);
     switch (r) {
@@ -43,6 +44,7 @@ SpecialistType pickSpecialist(RandomGenerator& rng) {
     }
 }
 
+/** @brief Pick triage color with weighted probabilities. */
 TriageColor pickColor(RandomGenerator& rng) {
     int r = rng.uniformInt(0, 99);
     if (r < 10) return TriageColor::Red;
@@ -50,6 +52,7 @@ TriageColor pickColor(RandomGenerator& rng) {
     return TriageColor::Green;
 }
 
+/** @brief Priority ordering for colors (lower is higher priority). */
 int colorPriority(TriageColor c) {
     switch (c) {
         case TriageColor::Red: return 1;    // highest priority
@@ -59,12 +62,14 @@ int colorPriority(TriageColor c) {
     }
 }
 
+/** @brief Monotonic clock in milliseconds (best effort). */
 long long monotonicMs() {
     struct timespec ts {};
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) return 0;
     return static_cast<long long>(ts.tv_sec) * 1000LL + ts.tv_nsec / 1000000LL;
 }
 
+/** @brief Simulation minutes derived from shared state start/time scale. */
 int currentSimMinutes(const SharedState* state) {
     if (!state || state->timeScaleMsPerSimMinute <= 0) return 0;
     long long now = monotonicMs();
@@ -74,11 +79,7 @@ int currentSimMinutes(const SharedState* state) {
 }
 } // namespace
 
-/**
- * @brief Classify patients, optionally send home, and route to specialists; maintains shared counters and exits on SIGUSR2.
- * @param keyPath path used for ftok keys.
- * @return 0 on normal exit.
- */
+// Triage loop entry (see header for details).
 int Triage::run(const std::string& keyPath) {
     // Ignore SIGINT so only SIGUSR2 controls shutdown.
     struct sigaction saIgnore {};

@@ -67,6 +67,7 @@ struct MetricsSnapshot {
 LogMetricsContext g_logMetricsContext{};
 bool g_metricsContextSet = false;
 
+/** @brief Safe queue length probe (0 on error). */
 int queueLength(int qid) {
     if (qid < 0) return 0;
     struct msqid_ds stats{};
@@ -76,6 +77,7 @@ int queueLength(int qid) {
     return static_cast<int>(stats.msg_qnum);
 }
 
+/** @brief Safe semaphore value probe (0 on error). */
 int semaphoreValue(int semId) {
     if (semId < 0) return 0;
     int val = semctl(semId, 0, GETVAL);
@@ -85,6 +87,7 @@ int semaphoreValue(int semId) {
     return val;
 }
 
+/** @brief Gather current queue/semaphore/shared-state metrics for log enrichment. */
 MetricsSnapshot collectMetrics() {
     MetricsSnapshot metrics{};
     if (!g_metricsContextSet) {
@@ -127,12 +130,7 @@ std::string roleLabel(int roleInt) {
 }
 } // namespace
 
-/**
- * @brief Dedicated logger process: open/create the output file, block on msgrcv() for LogMessage, stop on END marker.
- * @param queueId log queue id.
- * @param path destination log path.
- * @return 0 on clean shutdown, non-zero on error.
- */
+// Logger process entry (see header for details).
 int runLogger(int queueId, const std::string& path) {
     // Ignore SIGINT so logger survives Ctrl+C until it receives END.
     struct sigaction saIgnore {};
@@ -182,14 +180,7 @@ void setLogMetricsContext(const LogMetricsContext& context) {
     g_metricsContextSet = true;
 }
 
-/**
- * @brief Package a LogMessage, optionally include live metrics, and send via msgsnd().
- * @param queueId log queue id.
- * @param role sender role.
- * @param simTime simulated minute.
- * @param text payload text.
- * @return true on success, false on failure.
- */
+// Send a LogMessage, optionally enriched with live metrics (see header).
 bool logEvent(int queueId, Role role, int simTime, const std::string& text) {
     if (queueId == -1) {
         logErrno("logEvent invalid queue id");

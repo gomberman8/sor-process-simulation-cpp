@@ -30,6 +30,8 @@ struct PatientView {
     TriageColor color{TriageColor::None};
     SpecialistType specialist{SpecialistType::None};
     Stage stage{Stage::OutsideQueue};
+    bool registrationInProgress{false};
+    std::string registrationWindow;
     std::string outcome;
     int lastSimTime{0};
     int waitOrder{-1};
@@ -53,6 +55,7 @@ struct VisualizationState {
     int regSeq{0};
     int triageSeq{0};
     std::array<int, kSpecialistCount> specialistPids{};
+    std::array<bool, kSpecialistCount> specialistOnLeave{};
     std::array<int, kSpecialistCount> specialistHandled{};
     std::array<int, kSpecialistCount> specialistHome{};
     std::array<int, kSpecialistCount> specialistWard{};
@@ -67,8 +70,14 @@ struct VisualizationState {
     int latestSimTime{0};
 };
 
+/** @brief Ensure a PatientView exists for id, returning a reference. */
 PatientView& ensurePatient(VisualizationState& state, int patientId);
+
+/** @brief Apply patient-specific updates derived from a log entry. */
 void applyPatientUpdate(const LogEntry& entry, VisualizationState& state);
+
+/** @brief Apply a log entry to mutate the visualization state. */
 void applyLogEntry(const LogEntry& entry, VisualizationState& state);
 
+/** @brief Collect pointers to patients filtered by stage. */
 std::vector<const PatientView*> collectPatientsByStage(const VisualizationState& state, Stage stage);

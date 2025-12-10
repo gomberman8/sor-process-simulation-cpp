@@ -1,7 +1,6 @@
 #include <iostream>
 #include <string>
 #include <cstdlib>
-#include <iostream>
 #include <fstream>
 #include <ctime>
 #include <cstdio>
@@ -45,6 +44,11 @@ bool parseConfigFile(const std::string& path, Config& cfg, std::string& err) {
     cfg.triageServiceMs = 0;
     cfg.specialistExamMinMs = 10;
     cfg.specialistExamMaxMs = 40;
+    cfg.specialistLeaveMinMs = 100;
+    cfg.specialistLeaveMaxMs = 500;
+    cfg.reconcileWaitSem = 0;
+    cfg.patientGenMinMs = cfg.timeScaleMsPerSimMinute;
+    cfg.patientGenMaxMs = cfg.timeScaleMsPerSimMinute;
 
     auto trim = [](const std::string& s) {
         size_t b = s.find_first_not_of(" \t\r\n");
@@ -72,6 +76,11 @@ bool parseConfigFile(const std::string& path, Config& cfg, std::string& err) {
             else if (key == "triageServiceMs") cfg.triageServiceMs = std::stoi(val);
             else if (key == "specialistExamMinMs") cfg.specialistExamMinMs = std::stoi(val);
             else if (key == "specialistExamMaxMs") cfg.specialistExamMaxMs = std::stoi(val);
+            else if (key == "specialistLeaveMinMs") cfg.specialistLeaveMinMs = std::stoi(val);
+            else if (key == "specialistLeaveMaxMs") cfg.specialistLeaveMaxMs = std::stoi(val);
+            else if (key == "reconcileWaitSem") cfg.reconcileWaitSem = std::stoi(val);
+            else if (key == "patientGenMinMs") cfg.patientGenMinMs = std::stoi(val);
+            else if (key == "patientGenMaxMs") cfg.patientGenMaxMs = std::stoi(val);
         } catch (const std::exception&) {
             err = "Invalid value for key: " + key;
             return false;
@@ -107,6 +116,20 @@ bool parseConfigFile(const std::string& path, Config& cfg, std::string& err) {
     if (cfg.specialistExamMinMs <= 0 || cfg.specialistExamMaxMs <= 0 ||
         cfg.specialistExamMaxMs < cfg.specialistExamMinMs) {
         err = "specialistExamMinMs/maxMs must be >0 and max>=min";
+        return false;
+    }
+    if (cfg.specialistLeaveMinMs <= 0 || cfg.specialistLeaveMaxMs <= 0 ||
+        cfg.specialistLeaveMaxMs < cfg.specialistLeaveMinMs) {
+        err = "specialistLeaveMinMs/maxMs must be >0 and max>=min";
+        return false;
+    }
+    if (cfg.reconcileWaitSem != 0 && cfg.reconcileWaitSem != 1) {
+        err = "reconcileWaitSem must be 0 or 1";
+        return false;
+    }
+    if (cfg.patientGenMinMs <= 0 || cfg.patientGenMaxMs <= 0 ||
+        cfg.patientGenMaxMs < cfg.patientGenMinMs) {
+        err = "patientGenMinMs/maxMs must be >0 and max>=min";
         return false;
     }
     return true;
@@ -177,7 +200,7 @@ int main(int argc, char* argv[]) {
     if (argc >= 2 && std::string(argv[1]) == "patient_generator") {
         if (argc < 8) {
             std::cerr << "Patient generator usage: " << argv[0]
-                      << " patient_generator <keyPath> <N> <K> <simMinutes> <msPerMinute> <seed>"
+                      << " patient_generator <keyPath> <N> <K> <simMinutes> <msPerMinute> <seed> [genMinMs] [genMaxMs]"
                       << std::endl;
             return EXIT_FAILURE;
         }
@@ -192,6 +215,17 @@ int main(int argc, char* argv[]) {
         cfg.triageServiceMs = 0;
         cfg.specialistExamMinMs = 10;
         cfg.specialistExamMaxMs = 40;
+        cfg.specialistLeaveMinMs = 100;
+        cfg.specialistLeaveMaxMs = 500;
+        cfg.reconcileWaitSem = 0;
+        cfg.patientGenMinMs = cfg.timeScaleMsPerSimMinute;
+        cfg.patientGenMaxMs = cfg.timeScaleMsPerSimMinute;
+        if (argc >= 9) {
+            cfg.patientGenMinMs = std::stoi(argv[8]);
+        }
+        if (argc >= 10) {
+            cfg.patientGenMaxMs = std::stoi(argv[9]);
+        }
         PatientGenerator gen;
         return gen.run(argv[2], cfg);
     }
@@ -235,6 +269,11 @@ int main(int argc, char* argv[]) {
             cfg.triageServiceMs = 0;
             cfg.specialistExamMinMs = 10;
             cfg.specialistExamMaxMs = 40;
+            cfg.specialistLeaveMinMs = 100;
+            cfg.specialistLeaveMaxMs = 500;
+            cfg.reconcileWaitSem = 0;
+            cfg.patientGenMinMs = cfg.timeScaleMsPerSimMinute;
+            cfg.patientGenMaxMs = cfg.timeScaleMsPerSimMinute;
             // basic validation
             if (cfg.N_waitingRoom <= 0) {
                 err = "N_waitingRoom must be > 0";
