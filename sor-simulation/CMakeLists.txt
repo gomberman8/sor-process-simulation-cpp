@@ -5,8 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-set(SRC_FILES
-    src/main.cpp
+set(SIM_LIB_SRC
     src/director.cpp
     src/roles/patient_generator.cpp
     src/roles/patient.cpp
@@ -27,7 +26,13 @@ set(SRC_FILES
     src/util/random.cpp
 )
 
-add_executable(sor_sim ${SRC_FILES})
+add_library(sor_sim_core STATIC ${SIM_LIB_SRC})
+target_link_libraries(sor_sim_core PRIVATE pthread)
+target_include_directories(sor_sim_core PUBLIC include)
 
-target_link_libraries(sor_sim PRIVATE pthread)
+add_executable(sor_sim src/main.cpp)
+target_link_libraries(sor_sim PRIVATE sor_sim_core)
 target_include_directories(sor_sim PRIVATE include)
+
+enable_testing()
+add_subdirectory(tests)
