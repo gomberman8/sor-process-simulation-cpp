@@ -313,7 +313,8 @@ SummaryPayload buildPayload(const SharedState* state, long long simulatedSeconds
                             const std::vector<pid_t>& reg2History,
                             const std::array<pid_t, kSpecialistCount>& specialistPids) {
     SummaryPayload payload;
-    payload.totalPatients = state->totalPatients;
+    // Use triage outcomes to define "processed" patient count so pending arrivals do not skew summary.
+    payload.totalPatients = state->triageRed + state->triageYellow + state->triageGreen + state->triageSentHome;
     payload.waitingRoomCapacity = state->waitingRoomCapacity;
     payload.queueRegistrationLen = state->queueRegistrationLen;
     payload.triageRed = state->triageRed;
