@@ -4,8 +4,8 @@
 
 #include "model/config.hpp"
 
-#include <iostream>
 #include <string>
+#include <sstream>
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -44,7 +44,9 @@ int main(int argc, char** argv) {
     int outcomesTotal = summary.outcomeHome + summary.outcomeWard + summary.outcomeOther;
     ASSERT_TRUE(outcomesTotal <= summary.totalPatients, "Outcomes exceed total patients");
 
-    std::cout << "[OK] summary invariants satisfied (totalPatients=" << summary.totalPatients
-              << ") summary=" << result.summaryPath << std::endl;
+    std::ostringstream msg;
+    msg << "[OK] summary invariants satisfied (totalPatients=" << summary.totalPatients
+        << ") summary=" << result.summaryPath << "\n";
+    writeStdout(msg.str());
     return 0;
 }

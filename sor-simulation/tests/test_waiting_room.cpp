@@ -5,8 +5,8 @@
 #include "model/config.hpp"
 
 #include <algorithm>
-#include <iostream>
 #include <string>
+#include <sstream>
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -65,7 +65,9 @@ int main(int argc, char** argv) {
 
     ASSERT_TRUE(sawFull, "Simulation never filled waiting room to test limit");
     ASSERT_TRUE(sawWaitingOutside, "No evidence of patients waiting outside when full");
-    std::cout << "[OK] maxInside=" << maxInside << " capacity=" << cfg.N_waitingRoom
-              << " log=" << result.logPath << std::endl;
+    std::ostringstream msg;
+    msg << "[OK] maxInside=" << maxInside << " capacity=" << cfg.N_waitingRoom
+        << " log=" << result.logPath << "\n";
+    writeStdout(msg.str());
     return 0;
 }

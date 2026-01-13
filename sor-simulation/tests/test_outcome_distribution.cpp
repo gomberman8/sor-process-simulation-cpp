@@ -4,8 +4,8 @@
 
 #include "model/config.hpp"
 
-#include <iostream>
 #include <string>
+#include <sstream>
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -50,11 +50,13 @@ int main(int argc, char** argv) {
         ASSERT_TRUE(pctHome >= 70.0, "Home outcome proportion too low");
         ASSERT_TRUE(pctWard <= 30.0, "Ward outcome proportion too high");
         ASSERT_TRUE(pctOther <= 5.0, "Other-facility outcome proportion too high");
-        std::cout << "[OK] Outcomes within bands (Home=" << pctHome
-                  << "% Ward=" << pctWard << "% Other=" << pctOther
-                  << "%) summary=" << result.summaryPath << std::endl;
+        std::ostringstream msg;
+        msg << "[OK] Outcomes within bands (Home=" << pctHome
+            << "% Ward=" << pctWard << "% Other=" << pctOther
+            << "%) summary=" << result.summaryPath << "\n";
+        writeStdout(msg.str());
     } else {
-        std::cout << "[WARN] No patients reached specialists; skipping proportion checks" << std::endl;
+        writeStdout("[WARN] No patients reached specialists; skipping proportion checks\n");
     }
     return 0;
 }

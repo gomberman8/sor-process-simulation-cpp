@@ -31,6 +31,7 @@
 #include <iostream>
 #include <sstream>
 #include <array>
+#include <cerrno>
 
 namespace {
 constexpr int kDefaultTimeScaleMsPerSimMinute = 20;
@@ -48,6 +49,22 @@ struct IpcIds {
 std::atomic<bool> stopRequested(false);
 std::atomic<bool> sigusr2Requested(false);
 std::atomic<bool> sigintRequested(false);
+
+void writeStdout(const std::string& msg) {
+    const char* data = msg.data();
+    size_t remaining = msg.size();
+    while (remaining > 0) {
+        ssize_t written = ::write(STDOUT_FILENO, data, remaining);
+        if (written < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        data += static_cast<size_t>(written);
+        remaining -= static_cast<size_t>(written);
+    }
+}
 
 void handleSigint(int) {
     stopRequested.store(true);
@@ -792,7 +809,7 @@ int Director::run(const std::string& selfPath, const Config& config, const std::
         logEvent(ids.logQueue, Role::Director, stopSimTime, "Director received SIGUSR2, broadcasting shutdown");
     } else if (sigintRequested.load()) {
         logEvent(ids.logQueue, Role::Director, stopSimTime, "Director received SIGINT (Ctrl+C), broadcasting SIGUSR2");
-        std::cout << "Director received SIGINT (Ctrl+C), broadcasting SIGUSR2" << std::endl;
+        writeStdout("Director received SIGINT (Ctrl+C), broadcasting SIGUSR2\n");
     } else {
         logEvent(ids.logQueue, Role::Director, stopSimTime, "Director received stop request, broadcasting SIGUSR2");
     }

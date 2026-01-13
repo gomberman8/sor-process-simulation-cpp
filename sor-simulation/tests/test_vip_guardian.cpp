@@ -4,8 +4,8 @@
 
 #include "model/config.hpp"
 
-#include <iostream>
 #include <string>
+#include <sstream>
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -57,6 +57,8 @@ int main(int argc, char** argv) {
     ASSERT_TRUE(guardianThroughTriage, "Guardian pair did not flow through triage/specialist logs");
     ASSERT_TRUE(sawVip, "No VIP patient observed");
 
-    std::cout << "[OK] VIP and guardian cases observed in log=" << result.logPath << std::endl;
+    std::ostringstream msg;
+    msg << "[OK] VIP and guardian cases observed in log=" << result.logPath << "\n";
+    writeStdout(msg.str());
     return 0;
 }

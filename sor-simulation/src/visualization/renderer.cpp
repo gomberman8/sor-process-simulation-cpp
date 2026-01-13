@@ -5,18 +5,44 @@
 
 #include <array>
 #include <algorithm>
-#include <iostream>
+#include <cerrno>
 #include <sstream>
+#include <unistd.h>
+
+namespace {
+// Write the entire buffer to stdout, retrying on EINTR.
+void writeAll(const std::string& buf) {
+    const char* data = buf.data();
+    size_t remaining = buf.size();
+    while (remaining > 0) {
+        ssize_t written = ::write(STDOUT_FILENO, data, remaining);
+        if (written < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        data += static_cast<size_t>(written);
+        remaining -= static_cast<size_t>(written);
+    }
+}
+
+inline void appendLine(std::string& out, const std::string& line) {
+    out += line;
+    out.push_back('\n');
+}
+} // namespace
 
 
 // Render waiting room/triage/entrance overview with live stats (see header).
 void renderTopSection(const VisualizationState& state) {
+    std::string out;
     const int totalWidth = 118;
     const int colWaiting = 60;
     const int colTriage = 24;
     const int colEntrance = 30;
     std::string border(totalWidth, '=');
-    std::cout << border << "\n";
+    appendLine(out, border);
 
     // One-line stats above everything
     std::stringstream statsLine;
@@ -25,8 +51,8 @@ void renderTopSection(const VisualizationState& state) {
               << " home " << state.triageSentHome << " | "
               << "Disp H/W/O " << state.outcomeHome << "/" << state.outcomeWard << "/" << state.outcomeOther;
     std::string statsPadded = padded(statsLine.str(), totalWidth - 2);
-    std::cout << "|" << statsPadded << "|\n";
-    std::cout << border << "\n";
+    appendLine(out, "|" + statsPadded + "|");
+    appendLine(out, border);
 
     std::string reg2Status = state.reg2Active ? "REG2 ON" : "REG2 off";
 
@@ -66,9 +92,9 @@ void renderTopSection(const VisualizationState& state) {
     std::stringstream headEnt;
     headEnt << "ENTRANCE outQ=" << entranceList.size() << " " << reg2Status;
 
-    std::cout << "|" << padded(headWait.str(), colWaiting)
-              << "|" << padded(headReg.str(), colTriage)
-              << "|" << padded(headEnt.str(), colEntrance) << "|\n";
+    appendLine(out, "|" + padded(headWait.str(), colWaiting)
+                     + "|" + padded(headReg.str(), colTriage)
+                     + "|" + padded(headEnt.str(), colEntrance) + "|");
 
     std::vector<const PatientView*> waitingCombined;
     waitingCombined.insert(waitingCombined.end(), waitingList.begin(), waitingList.end());
@@ -141,31 +167,35 @@ void renderTopSection(const VisualizationState& state) {
         std::string w = i < waitingLines.size() ? waitingLines[i] : "";
         std::string r = i < regLines.size() ? regLines[i] : "";
         std::string e = i < entranceLines.size() ? entranceLines[i] : "";
-        std::cout << "|" << padded(w, colWaiting)
-                  << "|" << padded(r, colTriage)
-                  << "|" << padded(e, colEntrance) << "|\n";
+        appendLine(out, "|" + padded(w, colWaiting)
+                          + "|" + padded(r, colTriage)
+                          + "|" + padded(e, colEntrance) + "|");
     }
+    writeAll(out);
 }
 
 // Render the trailing set of recent log actions (see header).
 void renderActions(const VisualizationState& state) {
+    std::string out;
     const int totalWidth = 118;
     const int rightWidth = 30;
     const int leftWidth = totalWidth - rightWidth - 3;
     std::string separator(totalWidth, '-');
-    std::cout << separator << "\n";
-    std::cout << "|" << padded(" LAST ACTIONS", leftWidth) << "|" << padded("", rightWidth) << "|\n";
+    appendLine(out, separator);
+    appendLine(out, "|" + padded(" LAST ACTIONS", leftWidth) + "|" + padded("", rightWidth) + "|");
     size_t actionsToShow = std::min<size_t>(state.lastActions.size(), 10);
     for (size_t i = 0; i < actionsToShow; ++i) {
         const std::string& act = state.lastActions[state.lastActions.size() - actionsToShow + i];
-        std::cout << "|" << padded(act, leftWidth) << "|" << padded("", rightWidth) << "|\n";
+        appendLine(out, "|" + padded(act, leftWidth) + "|" + padded("", rightWidth) + "|");
     }
     std::string border(totalWidth, '=');
-    std::cout << border << "\n";
+    appendLine(out, border);
+    writeAll(out);
 }
 
 // Render specialist queues/active patients and per-specialist stats (see header).
 void renderSpecialists(const VisualizationState& state) {
+    std::string out;
     const int totalWidth = 118;
     const int colWidth = totalWidth / 3 - 1;
     std::array<std::vector<const PatientView*>, 6> queues{};
@@ -198,7 +228,7 @@ void renderSpecialists(const VisualizationState& state) {
         });
     }
 
-    std::cout << "|" << padded(" SPECIALISTS", totalWidth - 2) << "|\n";
+    appendLine(out, "|" + padded(" SPECIALISTS", totalWidth - 2) + "|");
     for (int row = 0; row < 2; ++row) {
         std::array<std::string, 3> headers{};
         for (int col = 0; col < 3; ++col) {
@@ -209,7 +239,7 @@ void renderSpecialists(const VisualizationState& state) {
                << queues[idx].size() << " act=" << active[idx].size();
             headers[col] = padded(ss.str(), colWidth);
         }
-        std::cout << "|" << headers[0] << "|" << headers[1] << "|" << headers[2] << "|\n";
+        appendLine(out, "|" + headers[0] + "|" + headers[1] + "|" + headers[2] + "|");
 
         // stats line per specialist directly under header
         std::array<std::string, 3> statVals{};
@@ -224,7 +254,7 @@ void renderSpecialists(const VisualizationState& state) {
             ss << "Handled=" << handled << " H/W/O " << h << "/" << w << "/" << o;
             statVals[col] = padded(ss.str(), colWidth);
         }
-        std::cout << "|" << statVals[0] << "|" << statVals[1] << "|" << statVals[2] << "|\n";
+        appendLine(out, "|" + statVals[0] + "|" + statVals[1] + "|" + statVals[2] + "|");
 
         // queue header line
         std::array<std::string, 3> queueHdr{};
@@ -233,7 +263,7 @@ void renderSpecialists(const VisualizationState& state) {
             if (idx >= 6) continue;
             queueHdr[col] = padded("Queue", colWidth);
         }
-        std::cout << "|" << queueHdr[0] << "|" << queueHdr[1] << "|" << queueHdr[2] << "|\n";
+        appendLine(out, "|" + queueHdr[0] + "|" + queueHdr[1] + "|" + queueHdr[2] + "|");
 
         // queue lines
         std::array<std::vector<std::string>, 3> queueLines{};
@@ -253,7 +283,7 @@ void renderSpecialists(const VisualizationState& state) {
                 rowVals[col] = r < queueLines[col].size() ? queueLines[col][r] : "";
                 rowVals[col] = padded(rowVals[col], colWidth);
             }
-            std::cout << "|" << rowVals[0] << "|" << rowVals[1] << "|" << rowVals[2] << "|\n";
+            appendLine(out, "|" + rowVals[0] + "|" + rowVals[1] + "|" + rowVals[2] + "|");
         }
 
         // active line
@@ -274,23 +304,23 @@ void renderSpecialists(const VisualizationState& state) {
             }
             actVals[col] = padded(combined, colWidth);
         }
-        std::cout << "|" << actHdr[0] << "|" << actHdr[1] << "|" << actHdr[2] << "|\n";
-        std::cout << "|" << actVals[0] << "|" << actVals[1] << "|" << actVals[2] << "|\n";
+        appendLine(out, "|" + actHdr[0] + "|" + actHdr[1] + "|" + actHdr[2] + "|");
+        appendLine(out, "|" + actVals[0] + "|" + actVals[1] + "|" + actVals[2] + "|");
 
         // separator between specialist rows for readability
         std::string sep(colWidth, '-');
-        std::cout << "|" << padded(sep, colWidth) << "|" << padded(sep, colWidth) << "|" << padded(sep, colWidth) << "|\n";
+        appendLine(out, "|" + padded(sep, colWidth) + "|" + padded(sep, colWidth) + "|" + padded(sep, colWidth) + "|");
     }
     std::string border(totalWidth, '=');
-    std::cout << border << "\n";
+    appendLine(out, border);
+    writeAll(out);
 }
 
 // Full frame render: clears screen then draws all sections (see header).
 void render(const VisualizationState& state) {
     // Clear screen (including scrollback) and move cursor home so each frame replaces the previous one.
-    std::cout << "\033[H\033[2J\033[3J";
+    writeAll("\033[H\033[2J\033[3J");
     renderTopSection(state);
     renderActions(state);
     renderSpecialists(state);
-    std::cout.flush();
 }

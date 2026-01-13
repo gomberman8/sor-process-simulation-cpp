@@ -23,7 +23,11 @@ Config keys (`config.cfg`):
 - SysV IPC mix: message queues (registration/triage/specialists/logging), shared memory for counters, semaphores for waiting-room capacity + shared-state mutex.
 - Signals: `SIGUSR1` pauses a specialist; `SIGUSR2` evacuates; workers ignore `SIGINT` so the director controls shutdown.
 - Robustness: input validation, per-syscall error checks (`errno`), minimal permissions (`0600`), cleanup via `IPC_RMID`/`semctl(IPC_RMID)`/`shmctl(IPC_RMID)` after each run.
-- Visibility: dedicated logger writes semicolon-separated lines consumed by the TUI visualizer.
+- Visibility: dedicated logger writes semicolon-separated lines consumed by the TUI visualizer; rendering buffers a full frame and writes via `write(1, ...)` to avoid iostream overhead.
+
+## Environment & limits
+- Toolchain: C++17 with CMake (`cmake -S . -B build && cmake --build build`), no external deps beyond libc/SysV IPC. Tested on Debian x86_64; SysV IPC may be unreliable on macOS, so run on Linux for grading.
+- Runtime footprint: minimal file descriptors (log file + IPC handles). IPC objects created with 0600 perms and removed at shutdown; `ipcs` should be empty after a clean exit. Signals installed via `sigaction` for `SIGUSR1`/`SIGUSR2`/`SIGINT`.
 
 ## End-to-end workflow (with permalinks)
 - Director bootstraps IPC (ftok/msgget/msgctl/semget/shmget) and spawns all children via fork/exec; see [queues](https://github.com/gomberman8/sor-process-simulation-cpp/blob/main/sor-simulation/src/director.cpp#L86-L155), [semaphores](https://github.com/gomberman8/sor-process-simulation-cpp/blob/main/sor-simulation/src/director.cpp#L158-L192), [shared memory](https://github.com/gomberman8/sor-process-simulation-cpp/blob/main/sor-simulation/src/director.cpp#L194-L220), and [process lifecycle](https://github.com/gomberman8/sor-process-simulation-cpp/blob/main/sor-simulation/src/director.cpp#L424-L844).

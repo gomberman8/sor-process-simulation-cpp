@@ -4,8 +4,8 @@
 
 #include "model/config.hpp"
 
-#include <iostream>
 #include <string>
+#include <sstream>
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -52,8 +52,10 @@ int main(int argc, char** argv) {
     ASSERT_TRUE(pctGreen >= 20.0 && pctGreen <= 75.0, "Green triage proportion out of expected band");
     ASSERT_TRUE(pctHome >= 0.0 && pctHome <= 15.0, "Sent-home proportion out of expected band");
 
-    std::cout << "[OK] Triage distribution within bands "
-              << "(R=" << pctRed << "% Y=" << pctYellow << "% G=" << pctGreen
-              << "% Home=" << pctHome << "%) summary=" << result.summaryPath << std::endl;
+    std::ostringstream msg;
+    msg << "[OK] Triage distribution within bands "
+        << "(R=" << pctRed << "% Y=" << pctYellow << "% G=" << pctGreen
+        << "% Home=" << pctHome << "%) summary=" << result.summaryPath << "\n";
+    writeStdout(msg.str());
     return 0;
 }

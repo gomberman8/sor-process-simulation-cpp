@@ -4,8 +4,8 @@
 
 #include "model/config.hpp"
 
-#include <iostream>
 #include <string>
+#include <sstream>
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -55,6 +55,8 @@ int main(int argc, char** argv) {
         std::cerr << "[WARN] Registration2 did not close during the run (queue may have stayed high)\n";
     }
 
-    std::cout << "[OK] reg2 spawn observed in log=" << result.logPath << std::endl;
+    std::ostringstream msg;
+    msg << "[OK] reg2 spawn observed in log=" << result.logPath << "\n";
+    writeStdout(msg.str());
     return 0;
 }

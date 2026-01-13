@@ -4,9 +4,9 @@
 
 #include "model/config.hpp"
 
-#include <iostream>
 #include <string>
 #include <vector>
+#include <sstream>
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -55,6 +55,8 @@ int main(int argc, char** argv) {
         ASSERT_TRUE(found, "Missing shutdown log: " + needle);
     }
 
-    std::cout << "[OK] SIGUSR2 shutdown observed in log=" << result.logPath << std::endl;
+    std::ostringstream msg;
+    msg << "[OK] SIGUSR2 shutdown observed in log=" << result.logPath << "\n";
+    writeStdout(msg.str());
     return 0;
 }

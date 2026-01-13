@@ -7,6 +7,8 @@
 #include <csignal>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <cerrno>
+#include <sstream>
 #include <vector>
 
 #include "director.hpp"
@@ -20,6 +22,22 @@
 #include "visualization/visualizer.hpp"
 
 namespace {
+void writeStdout(const std::string& msg) {
+    const char* data = msg.data();
+    size_t remaining = msg.size();
+    while (remaining > 0) {
+        ssize_t written = ::write(STDOUT_FILENO, data, remaining);
+        if (written < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        data += static_cast<size_t>(written);
+        remaining -= static_cast<size_t>(written);
+    }
+}
+
 /**
  * @brief Load key/value pairs from config file with defaults and validation.
  * @param path path to config file.
@@ -343,13 +361,15 @@ int main(int argc, char* argv[]) {
     Director director;
     int rc = director.run(argv[0], cfg, &logPath);
     if (rc == 0) {
-        std::cout << "SOR simulation WIP – director init and logger handshake OK" << std::endl;
+        writeStdout("SOR simulation WIP – director init and logger handshake OK\n");
         const std::string& summaryPath = director.lastSummaryPath();
         if (!summaryPath.empty()) {
             std::ifstream in(summaryPath);
             if (in) {
-                std::cout << "\n=== " << summaryPath << " ===\n";
-                std::cout << in.rdbuf() << std::flush;
+                writeStdout("\n=== " + summaryPath + " ===\n");
+                std::ostringstream buf;
+                buf << in.rdbuf();
+                writeStdout(buf.str());
             } else {
                 std::cerr << "Failed to open summary file: " << summaryPath << std::endl;
             }
