@@ -5,13 +5,16 @@
 #include <string>
 #include <vector>
 
+/** @brief Parsed simulator log lines plus raw text. */
 struct LogData {
     std::vector<LogEntry> entries;
     std::vector<std::string> rawLines;
 };
 
+/** @brief Parse a log file into structured entries and raw lines (best-effort). */
 LogData readLogFile(const std::string& path);
 
+/** @brief Aggregated summary.txt values for assertions. */
 struct SummaryData {
     int totalPatients{0};
     int triageRed{0};
@@ -23,4 +26,5 @@ struct SummaryData {
     int outcomeOther{0};
 };
 
+/** @brief Extract high-level counters from a summary file written by Director. */
 SummaryData parseSummary(const std::string& path);

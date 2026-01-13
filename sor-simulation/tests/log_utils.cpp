@@ -3,6 +3,7 @@
 #include <fstream>
 #include <sstream>
 
+// Read and parse the semicolon-separated simulator log; ignores malformed lines gracefully.
 LogData readLogFile(const std::string& path) {
     LogData data{};
     std::ifstream in(path);
@@ -21,6 +22,7 @@ LogData readLogFile(const std::string& path) {
     return data;
 }
 
+// Summary.txt lines are "Label: value"; extract the numeric portion.
 static int extractValue(const std::string& line) {
     std::size_t pos = line.find(':');
     if (pos == std::string::npos) return 0;

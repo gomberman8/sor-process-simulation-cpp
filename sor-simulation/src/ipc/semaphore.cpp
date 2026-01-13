@@ -27,11 +27,18 @@ bool Semaphore::create(key_t key, int initialValue, int permissions) {
 
 // P-operation (semop -1) to acquire.
 bool Semaphore::wait() {
+    return wait(1);
+}
+
+bool Semaphore::wait(int count) {
     if (semId == -1) {
         return false;
     }
+    if (count <= 0) {
+        return true;
+    }
     // Plain wait; no SEM_UNDO because waiting and releasing happen in different processes.
-    struct sembuf op {0, -1, 0};
+    struct sembuf op {0, static_cast<short>(-count), 0};
     while (true) {
         if (semop(semId, &op, 1) == 0) {
             return true;
@@ -45,10 +52,17 @@ bool Semaphore::wait() {
 
 // V-operation (semop +1) to release.
 bool Semaphore::post() {
+    return post(1);
+}
+
+bool Semaphore::post(int count) {
     if (semId == -1) {
         return false;
     }
-    struct sembuf op {0, 1, 0};
+    if (count <= 0) {
+        return true;
+    }
+    struct sembuf op {0, static_cast<short>(count), 0};
     while (true) {
         if (semop(semId, &op, 1) == 0) {
             return true;
@@ -59,7 +73,6 @@ bool Semaphore::post() {
         return false;
     }
 }
-
 // Remove the semaphore set (IPC_RMID).
 bool Semaphore::destroy() {
     if (semId == -1) {

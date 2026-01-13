@@ -5,6 +5,7 @@
 
 #include <string>
 
+/** @brief Outcome of a short-lived simulator run (exit code + log/summary paths). */
 struct SimResult {
     int exitCode{0};
     std::string logPath;

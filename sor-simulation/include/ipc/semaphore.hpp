@@ -29,10 +29,24 @@ public:
     bool wait();
 
     /**
+     * @brief P operation for multiple tokens (atomic).
+     * @param count number of tokens to acquire.
+     * @return true on success, false on failure.
+     */
+    bool wait(int count);
+
+    /**
      * @brief V operation (increment/unlock).
      * @return true on success, false on failure.
      */
     bool post();
+
+    /**
+     * @brief V operation for multiple tokens (atomic).
+     * @param count number of tokens to release.
+     * @return true on success, false on failure.
+     */
+    bool post(int count);
 
     /**
      * @brief Remove the semaphore set (IPC_RMID).

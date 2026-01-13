@@ -126,9 +126,7 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
      * @brief Returns waiting-room capacity and rolls back shared counters symmetrically.
      */
     auto releaseSlotsAndCounters = [&](int slots) {
-        for (int i = 0; i < slots; ++i) {
-            waitSem.post();
-        }
+        waitSem.post(slots);
         stateSem.wait();
         if (statePtr->currentInWaitingRoom >= slots) {
             statePtr->currentInWaitingRoom -= slots;
@@ -173,34 +171,19 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
              "Patient waiting to enter waiting room id=" + std::to_string(patientId) +
              " persons=" + std::to_string(personsCount));
 
-    // Acquire waiting room slots
-    //FIXME this would need changing, suspicious activity
-    int acquired = 0;
-    for (int i = 0; i < personsCount; ++i) {
-        if (!waitSem.wait()) {
-            int simTime = currentSimMinutes(statePtr);
-            logEvent(logQueue.id(), Role::Patient, simTime,
-                     "ERROR waitSem wait failed id=" + std::to_string(patientId) +
-                     " persons=" + std::to_string(personsCount) +
-                     " acquired=" + std::to_string(acquired));
-            // Roll back already acquired slots to avoid leaking capacity.
-            for (int j = 0; j < acquired; ++j) {
-                if (!waitSem.post()) {
-                }
-            }
-            logEvent(logQueue.id(), Role::Patient, simTime,
-                     "ERROR PATIENT ROLLBACK released=" + std::to_string(acquired));
-            shm.detach(statePtr);
-            return 1;
-        }
-        acquired += 1;
+    // Acquire waiting room slots atomically (avoid partial token grabs).
+    if (!waitSem.wait(personsCount)) {
+        int simTime = currentSimMinutes(statePtr);
+        logEvent(logQueue.id(), Role::Patient, simTime,
+                 "ERROR waitSem wait failed id=" + std::to_string(patientId) +
+                 " persons=" + std::to_string(personsCount));
+        shm.detach(statePtr);
+        return 1;
     }
 
     // If stop was requested after acquiring slots, roll back.
     if (stopFlag.load()) {
-        for (int i = 0; i < personsCount; ++i) {
-            waitSem.post();
-        }
+        waitSem.post(personsCount);
         stopChildThread();
         shm.detach(statePtr);
         return 0;
@@ -208,9 +191,7 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
 
     // Update shared state: inside count and queue len
     if (!stateSem.wait()) {
-        for (int i = 0; i < personsCount; ++i) {
-            waitSem.post();
-        }
+        waitSem.post(personsCount);
         stopChildThread();
         shm.detach(statePtr);
         return 1;

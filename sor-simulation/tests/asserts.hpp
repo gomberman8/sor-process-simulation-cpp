@@ -2,6 +2,8 @@
 
 #include <iostream>
 
+// Minimal assertion helpers for standalone test binaries (print to stderr and return failure).
+
 #define ASSERT_TRUE(cond, msg) \
     do { \
         if (!(cond)) { \

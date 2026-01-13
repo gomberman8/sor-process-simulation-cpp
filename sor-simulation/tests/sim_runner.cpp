@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 namespace {
+// Create a unique log path under a temp folder to avoid collisions between tests.
 std::string makeLogPath(const std::string& prefix) {
     namespace fs = std::filesystem;
     fs::path base = fs::temp_directory_path() / "sor_sim_tests";
@@ -25,6 +26,7 @@ SimResult runSimulation(const std::string& sorSimPath, const Config& cfg, int ru
     result.logPath = makeLogPath("run");
     std::atomic<bool> finished{false};
 
+    // Stopper thread wakes after runtimeMs and triggers orderly shutdown.
     std::thread stopper([&]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(runtimeMs));
         if (!finished.load()) {
