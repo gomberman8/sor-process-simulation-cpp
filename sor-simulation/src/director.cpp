@@ -40,6 +40,7 @@ struct IpcIds {
     int logQueue{-1};
     int regQueue{-1};
     int triageQueue{-1};
+    int doneQueue{-1};
     std::array<int, kSpecialistCount> specialistsQueue{};
     int shmId{-1};
     int semWaitingRoom{-1};
@@ -105,16 +106,18 @@ bool createQueues(const std::string& keyPath, IpcIds& ids) {
     MessageQueue logQ;
     MessageQueue regQ;
     MessageQueue triQ;
+    MessageQueue doneQ;
     std::array<MessageQueue, kSpecialistCount> specQs;
 
     key_t logKey = ftok(keyPath.c_str(), 'L');
     key_t regKey = ftok(keyPath.c_str(), 'R');
     key_t triKey = ftok(keyPath.c_str(), 'T');
+    key_t doneKey = ftok(keyPath.c_str(), 'Z');
     std::array<key_t, kSpecialistCount> specKeys;
     for (int i = 0; i < kSpecialistCount; ++i) {
         specKeys[i] = ftok(keyPath.c_str(), 'A' + i);
     }
-    if (logKey == -1 || regKey == -1 || triKey == -1) {
+    if (logKey == -1 || regKey == -1 || triKey == -1 || doneKey == -1) {
         logErrno("ftok failed");
         return false;
     }
@@ -135,12 +138,13 @@ bool createQueues(const std::string& keyPath, IpcIds& ids) {
     removeIfExists(logKey);
     removeIfExists(regKey);
     removeIfExists(triKey);
+    removeIfExists(doneKey);
     for (int i = 0; i < kSpecialistCount; ++i) {
         removeIfExists(specKeys[i]);
     }
 
     if (!logQ.create(logKey, 0600) || !regQ.create(regKey, 0600) ||
-        !triQ.create(triKey, 0600)) {
+        !triQ.create(triKey, 0600) || !doneQ.create(doneKey, 0600)) {
         return false;
     }
     for (int i = 0; i < kSpecialistCount; ++i) {
@@ -159,6 +163,7 @@ bool createQueues(const std::string& keyPath, IpcIds& ids) {
     tuneQueue(logQ.id());
     tuneQueue(regQ.id());
     tuneQueue(triQ.id());
+    tuneQueue(doneQ.id());
     for (int i = 0; i < kSpecialistCount; ++i) {
         tuneQueue(specQs[i].id());
     }
@@ -166,6 +171,7 @@ bool createQueues(const std::string& keyPath, IpcIds& ids) {
     ids.logQueue = logQ.id();
     ids.regQueue = regQ.id();
     ids.triageQueue = triQ.id();
+    ids.doneQueue = doneQ.id();
     for (int i = 0; i < kSpecialistCount; ++i) {
         ids.specialistsQueue[i] = specQs[i].id();
     }
@@ -411,6 +417,11 @@ void destroyIpc(const IpcIds& ids, SharedState* attachedState) {
     if (ids.triageQueue != -1) {
         if (msgctl(ids.triageQueue, IPC_RMID, nullptr) == -1) {
             logErrno("cleanup triage queue failed");
+        }
+    }
+    if (ids.doneQueue != -1) {
+        if (msgctl(ids.doneQueue, IPC_RMID, nullptr) == -1) {
+            logErrno("cleanup done queue failed");
         }
     }
     for (int qid : ids.specialistsQueue) {

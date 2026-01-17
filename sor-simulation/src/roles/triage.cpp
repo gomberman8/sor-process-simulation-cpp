@@ -97,6 +97,7 @@ int Triage::run(const std::string& keyPath) {
     MessageQueue triageQueue;
     std::array<MessageQueue, kSpecialistCount> specQueues;
     MessageQueue logQueue;
+    MessageQueue doneQueue;
     Semaphore stateSem;
     Semaphore waitSem;
     SharedMemory shm;
@@ -108,11 +109,12 @@ int Triage::run(const std::string& keyPath) {
         specKeys[i] = ftok(keyPath.c_str(), 'A' + i);
     }
     key_t logKey = ftok(keyPath.c_str(), 'L');
+    key_t doneKey = ftok(keyPath.c_str(), 'Z');
     key_t semStateKey = ftok(keyPath.c_str(), 'M');
     key_t waitKey = ftok(keyPath.c_str(), 'W');
     key_t shmKey = ftok(keyPath.c_str(), 'H');
 
-    if (regKey == -1 || triKey == -1 || logKey == -1 ||
+    if (regKey == -1 || triKey == -1 || logKey == -1 || doneKey == -1 ||
         semStateKey == -1 || waitKey == -1 || shmKey == -1) {
         logErrno("Triage ftok failed");
         return 1;
@@ -123,7 +125,7 @@ int Triage::run(const std::string& keyPath) {
             return 1;
         }
     }
-    if (!triageQueue.open(triKey) || !logQueue.open(logKey)) {
+    if (!triageQueue.open(triKey) || !logQueue.open(logKey) || !doneQueue.open(doneKey)) {
         return 1;
     }
     std::array<int, kSpecialistCount> specQueueIds;
@@ -186,6 +188,11 @@ int Triage::run(const std::string& keyPath) {
             simTime = currentSimMinutes(statePtr);
             logEvent(logQueue.id(), Role::Triage, simTime,
                      "Patient sent home from triage id=" + std::to_string(ev.patientId));
+            EventMessage doneMsg = ev;
+            doneMsg.mtype = static_cast<long>(EventType::PatientDone) + ev.patientId;
+            std::strncpy(doneMsg.extra, "home", sizeof(doneMsg.extra) - 1);
+            size_t payloadSize = sizeof(EventMessage) - sizeof(long);
+            msgsnd(doneQueue.id(), &doneMsg, payloadSize, IPC_NOWAIT);
             continue;
         }
 

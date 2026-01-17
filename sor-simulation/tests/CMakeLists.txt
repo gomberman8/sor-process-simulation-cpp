@@ -11,6 +11,9 @@ target_include_directories(test_support
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
 target_link_libraries(test_support PRIVATE sor_sim_core pthread)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)
+    target_link_libraries(test_support PRIVATE stdc++fs)
+endif()
 
 add_executable(test_waiting_room_capacity test_waiting_room.cpp)
 target_link_libraries(test_waiting_room_capacity PRIVATE test_support sor_sim_core pthread)

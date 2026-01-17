@@ -103,6 +103,7 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
 
     MessageQueue specQueue;
     MessageQueue logQueue;
+    MessageQueue doneQueue;
     Semaphore stateSem;
     Semaphore waitSem;
     SharedMemory shm;
@@ -111,16 +112,17 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
     key_t triKey = ftok(keyPath.c_str(), 'T');
     key_t specKey = ftok(keyPath.c_str(), 'A' + static_cast<int>(type));
     key_t logKey = ftok(keyPath.c_str(), 'L');
+    key_t doneKey = ftok(keyPath.c_str(), 'Z');
     key_t semStateKey = ftok(keyPath.c_str(), 'M');
     key_t waitKey = ftok(keyPath.c_str(), 'W');
     key_t shmKey = ftok(keyPath.c_str(), 'H');
 
     if (regKey == -1 || triKey == -1 || specKey == -1 || logKey == -1 ||
-        semStateKey == -1 || waitKey == -1 || shmKey == -1) {
+        doneKey == -1 || semStateKey == -1 || waitKey == -1 || shmKey == -1) {
         logErrno("Specialist ftok failed");
         return 1;
     }
-    if (!specQueue.open(specKey) || !logQueue.open(logKey)) {
+    if (!specQueue.open(specKey) || !logQueue.open(logKey) || !doneQueue.open(doneKey)) {
         return 1;
     }
     if (!stateSem.open(semStateKey) || !waitSem.open(waitKey)) {
@@ -219,6 +221,11 @@ int Specialist::run(const std::string& keyPath, SpecialistType type) {
                  " persons=" + std::to_string(ev.personsCount) +
                  " color=" + std::to_string(ev.triageColor) +
                  " specIdx=" + std::to_string(ev.specialistIdx));
+        EventMessage doneMsg = ev;
+        doneMsg.mtype = static_cast<long>(EventType::PatientDone) + ev.patientId;
+        std::strncpy(doneMsg.extra, outcomeText.c_str(), sizeof(doneMsg.extra) - 1);
+        size_t payloadSize = sizeof(EventMessage) - sizeof(long);
+        msgsnd(doneQueue.id(), &doneMsg, payloadSize, IPC_NOWAIT);
     }
 
     simTime = currentSimMinutes(statePtr);

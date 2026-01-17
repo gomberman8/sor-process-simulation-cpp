@@ -83,6 +83,7 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
 
     MessageQueue regQueue;
     MessageQueue logQueue;
+    MessageQueue doneQueue;
     Semaphore waitSem;
     Semaphore stateSem;
     SharedMemory shm;
@@ -90,16 +91,17 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
     key_t regKey = ftok(keyPath.c_str(), 'R');
     key_t triKey = ftok(keyPath.c_str(), 'T');
     key_t logKey = ftok(keyPath.c_str(), 'L');
+    key_t doneKey = ftok(keyPath.c_str(), 'Z');
     key_t waitKey = ftok(keyPath.c_str(), 'W');
     key_t stateKey = ftok(keyPath.c_str(), 'M');
     key_t shmKey = ftok(keyPath.c_str(), 'H');
 
     if (regKey == -1 || triKey == -1 || logKey == -1 ||
-        waitKey == -1 || stateKey == -1 || shmKey == -1) {
+        doneKey == -1 || waitKey == -1 || stateKey == -1 || shmKey == -1) {
         logErrno("Patient ftok failed");
         return 1;
     }
-    if (!regQueue.open(regKey) || !logQueue.open(logKey)) {
+    if (!regQueue.open(regKey) || !logQueue.open(logKey) || !doneQueue.open(doneKey)) {
         return 1;
     }
     if (!waitSem.open(waitKey) || !stateSem.open(stateKey)) {
@@ -247,6 +249,28 @@ int Patient::run(const std::string& keyPath, int patientId, int age, bool isVip,
     // Patient process ends; waiting room slots will be released once registration forwards the patient.
     simTime = currentSimMinutes(statePtr);
     logEvent(logQueue.id(), Role::Patient, simTime, "Patient registered id=" + std::to_string(patientId));
+
+    EventMessage doneMsg{};
+    long doneType = static_cast<long>(EventType::PatientDone) + patientId;
+    while (!stopFlag.load()) {
+        ssize_t res = msgrcv(doneQueue.id(), &doneMsg, sizeof(EventMessage) - sizeof(long),
+                             doneType, 0);
+        if (res >= 0) {
+            simTime = currentSimMinutes(statePtr);
+            logEvent(logQueue.id(), Role::Patient, simTime,
+                     "Patient done id=" + std::to_string(patientId) +
+                     " outcome=" + std::string(doneMsg.extra));
+            break;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        if (errno == EIDRM || errno == EINVAL) {
+            break;
+        }
+        logErrno("Patient wait for done failed");
+        break;
+    }
 
     // Stop child thread if it was started.
     stopChildThread();
