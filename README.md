@@ -408,6 +408,7 @@ Summary file format (`sor_summary_<timestamp>.txt`):
 ```
 
 ## Tests (ctest)
+- Run `ctest -V` from the `build/` directory so CTest writes under `build/Testing/`.
 - Harness: `ctest -V` builds/runs small binaries that launch `sor_sim`, let it run briefly, then signal `SIGUSR2` via `runSimulation` ([sim_runner.cpp](https://github.com/gomberman8/sor-process-simulation-cpp/blob/main/sor-simulation/tests/sim_runner.cpp#L23-L41)) using a temporary log path helper ([sim_runner.cpp](https://github.com/gomberman8/sor-process-simulation-cpp/blob/main/sor-simulation/tests/sim_runner.cpp#L10-L21)).
 - Helpers: assertions write to stderr and exit non-zero on failure ([asserts.hpp](https://github.com/gomberman8/sor-process-simulation-cpp/blob/main/sor-simulation/tests/asserts.hpp#L1-L22)); log utilities parse simulator logs and summaries for metrics ([log_utils.hpp](https://github.com/gomberman8/sor-process-simulation-cpp/blob/main/sor-simulation/tests/log_utils.hpp#L1-L30), [log_utils.cpp](https://github.com/gomberman8/sor-process-simulation-cpp/blob/main/sor-simulation/tests/log_utils.cpp#L6-L61)).
 - `test_waiting_room`: fills waiting room and asserts occupancy never exceeds capacity, proving semaphore integrity ([test_waiting_room.cpp](https://github.com/gomberman8/sor-process-simulation-cpp/blob/main/sor-simulation/tests/test_waiting_room.cpp#L11-L70)).
